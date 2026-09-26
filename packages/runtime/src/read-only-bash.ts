@@ -64,15 +64,27 @@ const BUILTIN = "(builtin)";
  */
 function locateProgram(word: string, root: string): string | undefined {
   if (word.includes("/")) return insideWorkspace(word, root) ? undefined : word;
+  // Windows finds `git` as `git.exe` (and the other runnable extensions).
+  const names =
+    process.platform === "win32"
+      ? [
+          word,
+          ...(process.env.PATHEXT ?? ".EXE;.CMD;.BAT")
+            .split(";")
+            .map((e) => word + e.toLowerCase()),
+        ]
+      : [word];
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    const candidate = join(isAbsolute(dir) ? dir : resolve(root, dir), word);
-    try {
-      if (!statSync(candidate).isFile()) continue;
-      accessSync(candidate, constants.X_OK);
-    } catch {
-      continue; // not there, or not something the shell can run
+    for (const name of names) {
+      const candidate = join(isAbsolute(dir) ? dir : resolve(root, dir), name);
+      try {
+        if (!statSync(candidate).isFile()) continue;
+        accessSync(candidate, constants.X_OK);
+      } catch {
+        continue; // not there, or not something the shell can run
+      }
+      return isAbsolute(dir) && !insideWorkspace(candidate, root) ? candidate : undefined;
     }
-    return isAbsolute(dir) && !insideWorkspace(candidate, root) ? candidate : undefined;
   }
   return BUILTIN;
 }

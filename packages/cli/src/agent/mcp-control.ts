@@ -76,23 +76,22 @@ export function makeMcpControl(opts: {
 
   // Drop the current servers at once (nothing revoked stays usable while the new connection starts, or if
   // it fails), then connect again from the current config and trust. Rejects if that fails.
+  // Checked whenever tools or prompts are handed out: trust that lapsed takes the folder's servers with it.
+  let trustedBefore = opts.projectTrusted?.() ?? true;
   const refresh = async () => {
+    trustedBefore = opts.projectTrusted?.() ?? true; // this reconnect already reflects the trust as it is
     generation++; // a connect still in flight must not put the old servers back
     current?.close();
     current = undefined;
     await reconnect();
   };
-  // Checked whenever tools or prompts are handed out: trust that lapsed takes the folder's servers with it.
-  let trustedBefore = opts.projectTrusted?.() ?? true;
   const followTrust = () => {
     if (!opts.projectTrusted) return;
     const now = opts.projectTrusted();
     const lapsed = trustedBefore && !now;
     trustedBefore = now;
-    const folderServers = (current?.servers ?? []).some(
-      (s) => s.state === "connected" && (s.source === "project" || s.source === "plugin"),
-    );
-    if (lapsed && folderServers) void refresh().catch(() => {});
+    // Every lapse reconnects: that also discards a connection still being made under the old trust.
+    if (lapsed) void refresh().catch(() => {});
   };
 
   return {

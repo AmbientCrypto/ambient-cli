@@ -148,6 +148,25 @@ describe("skills discovery — Claude plugins + Codex, full scrape vs injectable
     await rm(home, { recursive: true, force: true });
   });
 
+  it("without an install record, switching one plugin off leaves others alone", () => {
+    const skill = (base: string, name: string) => {
+      mkdirSync(join(base, name), { recursive: true });
+      writeFileSync(join(base, name, "SKILL.md"), `---\nname: ${name}\ndescription: d\n---\nbody`);
+    };
+    const cache = join(home, ".claude", "plugins", "cache");
+    skill(join(cache, "mkt", "tool", "1.0.0", "skills"), "fromtool");
+    skill(join(cache, "a", "foo", "1.0.0", "skills"), "foofroma");
+    skill(join(cache, "b", "foo", "1.0.0", "skills"), "foofromb");
+    writeFileSync(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "cache@mkt": false, "foo@a": false, "foo@b": true } }),
+    );
+    const names = discoverSkills(ws, home).map((s) => s.name);
+    expect(names).toContain("fromtool"); // "cache" is a folder here, not the switched-off plugin
+    expect(names).not.toContain("foofroma");
+    expect(names).toContain("foofromb");
+  });
+
   it("without an install record, a plugin switched off in your settings stays off", () => {
     expect(discoverSkills(ws, home).some((s) => s.name === "plugtool")).toBe(true);
     writeFileSync(

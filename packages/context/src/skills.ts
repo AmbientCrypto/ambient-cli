@@ -80,6 +80,22 @@ export function parseSkill(
   };
 }
 
+/**
+ * Which plugin a folder under `~/.claude/plugins` belongs to, from Claude Code's layouts:
+ * `cache/<marketplace>/<plugin>/…` and `marketplaces/<marketplace>/plugins/<plugin>/…` give `plugin@marketplace`;
+ * `<plugin>/…` gives just the name.
+ */
+function legacyPluginId(segments: string[]): string | undefined {
+  const [first, second, third] = segments;
+  if (first === "cache") return second && third ? `${third}@${second}` : undefined;
+  if (first === "marketplaces") {
+    const at = segments.indexOf("plugins", 2);
+    const name = at > 0 ? segments[at + 1] : undefined;
+    return second && name ? `${name}@${second}` : undefined;
+  }
+  return first || undefined;
+}
+
 /** Find every `skills/` directory under `~/.claude/plugins` (installed Claude plugins ship skills at varying
  *  depths — `plugins/<name>/skills` and the official cache's `plugins/cache/<repo>/<plugin>/<ver>/skills`).
  *  A bounded, symlink-safe walk (skips node_modules/.git, depth + count capped) so launch stays fast. */
@@ -96,8 +112,14 @@ function pluginSkillRoots(workspaceRoot: string, home: string, plugins: PluginOp
   // No install record says which plugin a folder is, so go by name: a plugin switched off (in your settings,
   // or a trusted folder's) stays off, whatever layout it's in.
   const choices = enabledPluginIds(workspaceRoot, home, plugins);
-  const off = new Set([...choices].filter(([, on]) => !on).map(([id]) => id.split("@")[0] ?? id));
-  for (const [id, on] of choices) if (on) off.delete(id.split("@")[0] ?? id);
+  const switchedOff = (segments: string[]): boolean => {
+    const id = legacyPluginId(segments);
+    if (!id) return false;
+    if (id.includes("@")) return choices.get(id) === false;
+    // Only a name: off when every entry for that name is off.
+    const named = [...choices].filter(([k]) => k.split("@")[0] === id);
+    return named.length > 0 && named.every(([, on]) => !on);
+  };
   const found: string[] = [];
   const walk = (dir: string, depth: number): void => {
     if (depth > 5 || found.length >= MAX_DIR_ENTRIES) return;
@@ -111,9 +133,8 @@ function pluginSkillRoots(workspaceRoot: string, home: string, plugins: PluginOp
       if (!e.isDirectory() || e.isSymbolicLink()) continue; // never follow a symlinked dir out of the tree
       if (e.name === "node_modules" || e.name === ".git") continue;
       if (e.name === "skills") {
-        const segments = relative(baseDir, dir).split(sep);
         // a skills root — don't descend into it (discoverSkills reads it)
-        if (!segments.some((seg) => off.has(seg))) found.push(join(dir, e.name));
+        if (!switchedOff(relative(baseDir, dir).split(sep))) found.push(join(dir, e.name));
         continue;
       }
       walk(join(dir, e.name), depth + 1);

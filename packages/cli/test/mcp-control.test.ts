@@ -250,3 +250,78 @@ describe("a folder whose trust lapses mid-session", () => {
     control.close();
   });
 });
+
+describe("trust that lapses while servers are still connecting", () => {
+  it("discards that connection instead of letting it arrive later", async () => {
+    let trusted = true;
+    let release: (() => void) | undefined;
+    let connects = 0;
+    const tool = { manifest: { name: "mcp__proj__t" } };
+    const connectImpl = async (_ws: string, o: { approveServer?: () => Promise<boolean> }) => {
+      connects++;
+      const allowed = (await o.approveServer?.()) === true;
+      if (connects === 1)
+        await new Promise<void>((r) => {
+          release = r;
+        });
+      return {
+        tools: allowed ? [tool] : [],
+        currentTools: () => (allowed ? [tool] : []),
+        prompts: [],
+        getPrompt: async () => "",
+        notices: [],
+        close: () => {},
+        servers: [],
+      } as unknown as McpConnection;
+    };
+    const control = makeMcpControl({
+      workspaceRoot: ws,
+      connect: { approveServer: async () => trusted },
+      store: makeTokenStore({ platform: "linux", configDir: ws }),
+      connectImpl: connectImpl as never,
+      projectTrusted: () => trusted,
+    });
+    const starting = control.start();
+    await new Promise((r) => setTimeout(r, 5));
+    trusted = false;
+    expect(control.tools()).toEqual([]); // sees the lapse while the first connect is pending
+    release?.();
+    await starting;
+    await new Promise((r) => setTimeout(r, 10));
+    expect(control.tools()).toEqual([]);
+    control.close();
+  });
+});
+
+describe("/trust no's own reconnect", () => {
+  it("isn't followed by a second one on the next tool lookup", async () => {
+    let trusted = true;
+    let connects = 0;
+    const connectImpl = async () => {
+      connects++;
+      return {
+        tools: [],
+        currentTools: () => [],
+        prompts: [],
+        getPrompt: async () => "",
+        notices: [],
+        close: () => {},
+        servers: [],
+      } as unknown as McpConnection;
+    };
+    const control = makeMcpControl({
+      workspaceRoot: ws,
+      connect: {},
+      store: makeTokenStore({ platform: "linux", configDir: ws }),
+      connectImpl: connectImpl as never,
+      projectTrusted: () => trusted,
+    });
+    await control.start();
+    trusted = false;
+    await control.refresh(); // what /trust no does
+    control.tools();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(connects).toBe(2);
+    control.close();
+  });
+});
