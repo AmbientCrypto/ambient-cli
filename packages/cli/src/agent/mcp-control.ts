@@ -51,6 +51,9 @@ export function makeMcpControl(opts: {
   store?: TokenStore;
   connectImpl?: typeof connectMcp;
   signInImpl?: typeof signIn;
+  /** Whether the folder's own settings are trusted right now. When that stops being true (its settings
+   *  changed, or /trust no), the servers it brought are dropped at once and the rest reconnect. */
+  projectTrusted?: () => boolean;
 }): McpControl & { start(): Promise<void> } {
   const store = opts.store ?? makeTokenStore();
   const connect = opts.connectImpl ?? connectMcp;
@@ -71,20 +74,38 @@ export function makeMcpControl(opts: {
     current = next;
   };
 
+  // Drop the current servers at once (nothing revoked stays usable while the new connection starts, or if
+  // it fails), then connect again from the current config and trust. Rejects if that fails.
+  const refresh = async () => {
+    generation++; // a connect still in flight must not put the old servers back
+    current?.close();
+    current = undefined;
+    await reconnect();
+  };
+  // Checked whenever tools or prompts are handed out: trust that lapsed takes the folder's servers with it.
+  let trustedBefore = opts.projectTrusted?.() ?? true;
+  const followTrust = () => {
+    if (!opts.projectTrusted) return;
+    const now = opts.projectTrusted();
+    const lapsed = trustedBefore && !now;
+    trustedBefore = now;
+    const folderServers = (current?.servers ?? []).some(
+      (s) => s.state === "connected" && (s.source === "project" || s.source === "plugin"),
+    );
+    if (lapsed && folderServers) void refresh().catch(() => {});
+  };
+
   return {
     start: () => reconnect().catch(() => {}),
-    // Drop the current servers at once (nothing revoked stays usable while the new connection starts,
-    // or if it fails), then connect again from the current config and trust. Rejects if that fails.
-    refresh: async () => {
-      generation++; // a connect still in flight must not put the old servers back
-      current?.close();
-      current = undefined;
-      await reconnect();
-    },
+    refresh,
     status: () => current?.servers,
-    tools: () => current?.currentTools() ?? [],
-    promptCommands: () =>
-      (current?.prompts ?? [])
+    tools: () => {
+      followTrust();
+      return current?.currentTools() ?? [];
+    },
+    promptCommands: () => {
+      followTrust();
+      return (current?.prompts ?? [])
         .filter((p) => /^[\w.-]+$/.test(p.prompt.name))
         .map((p) => ({
           name: promptCommandName(p.server, p.prompt.name),
@@ -96,8 +117,10 @@ export function makeMcpControl(opts: {
                   .join(" "),
               }
             : {}),
-        })),
+        }));
+    },
     async expandPrompt(command, text) {
+      followTrust();
       const entry = current?.prompts.find(
         (p) => promptCommandName(p.server, p.prompt.name) === command,
       );

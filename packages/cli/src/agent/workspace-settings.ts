@@ -132,8 +132,11 @@ export function projectFingerprint(
 }
 
 const LOCK_WAIT_MS = 3_000;
-/** A save takes milliseconds; a lock this old belongs to a process that stopped (or was suspended). */
-const LOCK_STALE_MS = 60_000;
+/** A lock with no owner written yet: its process stopped between creating it and saying who it is. */
+const LOCK_UNOWNED_STALE_MS = 10_000;
+/** A save takes milliseconds: a lock held this long by a process that still exists is one left behind by
+ *  a process whose id has since been reused. */
+const LOCK_OWNED_STALE_MS = 10 * 60_000;
 const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 function processAlive(pid: number): boolean {
@@ -145,7 +148,7 @@ function processAlive(pid: number): boolean {
   }
 }
 
-/** Whether a lock can be taken over: its owner is gone, or it's far older than any save takes. */
+/** Whether a lock can be taken over: its owner is gone (or, far too old to be a save in progress). */
 function lockIsStale(lock: string): boolean {
   let age = 0;
   try {
@@ -153,13 +156,14 @@ function lockIsStale(lock: string): boolean {
   } catch {
     return false; // gone already — the next attempt takes it
   }
-  if (age > LOCK_STALE_MS) return true;
+  let pid: number | undefined;
   try {
-    const pid = Number(readFileSync(join(lock, "owner"), "utf8").split(" ")[0]);
-    return Number.isInteger(pid) && pid > 0 && !processAlive(pid);
+    pid = Number(readFileSync(join(lock, "owner"), "utf8").split(" ")[0]);
   } catch {
-    return false; // its owner is still writing who it is
+    return age > LOCK_UNOWNED_STALE_MS;
   }
+  if (!Number.isInteger(pid) || pid <= 0) return age > LOCK_UNOWNED_STALE_MS;
+  return !processAlive(pid) || age > LOCK_OWNED_STALE_MS;
 }
 
 /** Run `fn` holding `<file>.lock` (a folder, created atomically, naming its owner), so two ambient

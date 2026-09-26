@@ -117,16 +117,20 @@ interface Created {
 
 /** Write one file. A new file is created exclusively, so one that appeared meanwhile is never overwritten;
  *  `state.created` records the file this call made (only it may be removed by a rollback). */
-async function writeOne(f: PlannedWrite, state: { created?: Created }): Promise<void> {
+async function writeOne(
+  f: PlannedWrite,
+  state: { created?: Created },
+  signal?: AbortSignal,
+): Promise<void> {
   if (f.before !== undefined) {
-    await writeFile(f.abs, f.after, "utf8");
+    await writeFile(f.abs, f.after, { encoding: "utf8", ...(signal ? { signal } : {}) });
     return;
   }
   const fh = await open(f.abs, "wx");
   try {
     const st = await fh.stat();
     state.created = { dev: st.dev, ino: st.ino };
-    await fh.writeFile(f.after, "utf8");
+    await fh.writeFile(f.after, { encoding: "utf8", ...(signal ? { signal } : {}) });
   } finally {
     await fh.close();
   }
@@ -148,6 +152,15 @@ export async function restore(
     const st = await stat(f.abs).catch(() => undefined);
     if (!st) return true;
     if (st.dev !== created.dev || st.ino !== created.ino) return false;
+    // The same file, but only while it holds this call's own content (edited in place meanwhile → keep).
+    const content = await readFile(f.abs).catch(() => undefined);
+    const written = Buffer.from(f.after, "utf8");
+    const ours =
+      content !== undefined &&
+      (failed
+        ? content.length <= written.length && written.subarray(0, content.length).equals(content)
+        : content.equals(written));
+    if (!ours) return false;
     await rm(f.abs, { force: true });
     return true;
   }
@@ -180,7 +193,7 @@ export async function writeAllOrRestore(
   for (const [i, file] of files.entries()) {
     try {
       if (i > 0) signal?.throwIfAborted();
-      await writeOne(file, created[i] as { created?: Created });
+      await writeOne(file, created[i] as { created?: Created }, signal);
     } catch (err) {
       const unrestored: string[] = [];
       const changedMeanwhile: string[] = [];

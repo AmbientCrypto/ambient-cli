@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { z } from "zod";
 import { builtinSkillBody, builtinSkillMetas, isBuiltinSkillPath } from "./builtin-skills.js";
 import { boolField, parseFrontmatter, textField } from "./frontmatter.js";
@@ -12,7 +12,7 @@ import {
   readTextCappedSafe,
   readUserMarkdown,
 } from "./fs-safe.js";
-import { type PluginOptions, installedPlugins } from "./plugins.js";
+import { type PluginOptions, enabledPluginIds, installedPlugins } from "./plugins.js";
 
 /**
  * Agent Skills — progressive disclosure (the single most-converged pattern in the field).
@@ -93,6 +93,11 @@ function pluginSkillRoots(workspaceRoot: string, home: string, plugins: PluginOp
   }
   const baseDir = join(home, ".claude", "plugins");
   if (!isRealDir(baseDir)) return [];
+  // No install record says which plugin a folder is, so go by name: a plugin switched off (in your settings,
+  // or a trusted folder's) stays off, whatever layout it's in.
+  const choices = enabledPluginIds(workspaceRoot, home, plugins);
+  const off = new Set([...choices].filter(([, on]) => !on).map(([id]) => id.split("@")[0] ?? id));
+  for (const [id, on] of choices) if (on) off.delete(id.split("@")[0] ?? id);
   const found: string[] = [];
   const walk = (dir: string, depth: number): void => {
     if (depth > 5 || found.length >= MAX_DIR_ENTRIES) return;
@@ -106,7 +111,9 @@ function pluginSkillRoots(workspaceRoot: string, home: string, plugins: PluginOp
       if (!e.isDirectory() || e.isSymbolicLink()) continue; // never follow a symlinked dir out of the tree
       if (e.name === "node_modules" || e.name === ".git") continue;
       if (e.name === "skills") {
-        found.push(join(dir, e.name)); // a skills root — don't descend into it (discoverSkills reads it)
+        const segments = relative(baseDir, dir).split(sep);
+        // a skills root — don't descend into it (discoverSkills reads it)
+        if (!segments.some((seg) => off.has(seg))) found.push(join(dir, e.name));
         continue;
       }
       walk(join(dir, e.name), depth + 1);

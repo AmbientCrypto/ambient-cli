@@ -148,6 +148,15 @@ describe("skills discovery — Claude plugins + Codex, full scrape vs injectable
     await rm(home, { recursive: true, force: true });
   });
 
+  it("without an install record, a plugin switched off in your settings stays off", () => {
+    expect(discoverSkills(ws, home).some((s) => s.name === "plugtool")).toBe(true);
+    writeFileSync(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "someplugin@market": false } }),
+    );
+    expect(discoverSkills(ws, home).some((s) => s.name === "plugtool")).toBe(false);
+  });
+
   it("full discoverSkills pulls in Claude user + plugin + Codex skills", () => {
     expect(userNames(discoverSkills(ws, home))).toEqual(["codextool", "mine", "plugtool"]);
   });

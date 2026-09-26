@@ -1,5 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import {
+  constants,
+  accessSync,
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { classifyToolRisk, isWithinWorkspace, parseShellCommands } from "@amb/permissions";
 import { fromGitBashPath } from "@amb/tools-core";
@@ -26,7 +35,8 @@ export function readOnlyBashHolds(
   for (const seg of parseShellCommands(command)) {
     // The program itself must come from outside the workspace: a repository can ship its own `bin/git` or
     // `ls`, and a PATH that includes a project folder (direnv, `./node_modules/.bin`) would run it.
-    if (!programOutsideWorkspace(seg.argv[0] ?? "", root)) return false;
+    const program = locateProgram(seg.argv[0] ?? "", root);
+    if (program === undefined) return false;
     const name = seg.argv[0]?.split("/").pop() ?? "";
     const args = seg.argv.slice(1);
     if (FOLLOWS_LINKS[name]?.(args)) return false;
@@ -36,30 +46,35 @@ export function readOnlyBashHolds(
         if (!readsWithinWorkspace(value, root, ctx.readDenied)) return false;
       }
     }
-    if (name === "git" && !gitIsInert(root, ctx.readDenied !== undefined, args)) return false;
+    // The git that runs the probes is the one that was just vetted — never another found on PATH.
+    const git = program === BUILTIN ? "git" : program;
+    if (name === "git" && !gitIsInert(root, ctx.readDenied !== undefined, args, git)) return false;
   }
   return true;
 }
 
+/** A command word the shell runs itself, found in no PATH folder (`echo`, `cd`). */
+const BUILTIN = "(builtin)";
+
 /**
- * Whether the program a command word runs lives outside the workspace: an absolute path is checked where it
- * really is; a bare name is looked up on PATH the way the shell will (the first folder holding it wins, and a
- * relative PATH folder counts as the workspace). A name found nowhere is a shell builtin (`echo`, `cd`).
+ * Where the program a command word runs lives, if that's outside the workspace: an absolute path is checked
+ * where it really is; a bare name is looked up on PATH the way the shell does (the first folder with an
+ * executable of that name wins, and a relative PATH folder counts as the workspace). BUILTIN when no folder
+ * has it; undefined when the program would come from the workspace.
  */
-function programOutsideWorkspace(word: string, root: string): boolean {
-  if (word.includes("/")) return !insideWorkspace(word, root);
+function locateProgram(word: string, root: string): string | undefined {
+  if (word.includes("/")) return insideWorkspace(word, root) ? undefined : word;
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     const candidate = join(isAbsolute(dir) ? dir : resolve(root, dir), word);
-    let isFile = false;
     try {
-      isFile = statSync(candidate).isFile();
+      if (!statSync(candidate).isFile()) continue;
+      accessSync(candidate, constants.X_OK);
     } catch {
-      continue;
+      continue; // not there, or not something the shell can run
     }
-    if (!isFile) continue;
-    return isAbsolute(dir) && !insideWorkspace(candidate, root);
+    return isAbsolute(dir) && !insideWorkspace(candidate, root) ? candidate : undefined;
   }
-  return true;
+  return BUILTIN;
 }
 
 /** Whether a path (followed through symlinks where it exists) is inside the workspace. */
@@ -170,10 +185,15 @@ const READ_TIME_HOOKS = ["post-index-change", "reference-transaction"];
  * worktree config (include files, extensions and every program-naming key fall outside the list).
  * With Read deny rules, only `git status`/`branch` stay automatic — the rest print file contents.
  */
-export function gitIsInert(cwd: string, hasDenyRules = false, args: string[] = []): boolean {
+export function gitIsInert(
+  cwd: string,
+  hasDenyRules = false,
+  args: string[] = [],
+  gitPath = "git",
+): boolean {
   if (hasDenyRules && !["status", "branch"].includes(args[0] ?? "")) return false;
   const git = (a: string[]) =>
-    spawnSync("git", a, { cwd, encoding: "utf8", timeout: 5_000, windowsHide: true });
+    spawnSync(gitPath, a, { cwd, encoding: "utf8", timeout: 5_000, windowsHide: true });
   const hooks = git(["rev-parse", "--git-path", "hooks"]);
   if (hooks.error || hooks.status !== 0) return false; // not a repository we can check → ask
   try {

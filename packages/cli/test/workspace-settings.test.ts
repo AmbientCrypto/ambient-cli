@@ -344,6 +344,11 @@ describe("saving trust while another ambient holds the lock", () => {
     writeFileSync(join(lock, "owner"), `${process.pid} someone-else`); // alive
     expect(s.trust()).toContain("another ambient is saving it");
     expect(readFileSync(join(lock, "owner"), "utf8")).toBe(`${process.pid} someone-else`);
+    // Even an old lock stays while its owner still runs (a suspended process mid-save).
+    const { utimesSync } = require("node:fs") as typeof import("node:fs");
+    const old = new Date(Date.now() - 5 * 60_000);
+    utimesSync(lock, old, old);
+    expect(s.trust()).toContain("another ambient is saving it");
   }, 10_000);
 
   it("shows a plugin id that isn't name@marketplace whole", () => {

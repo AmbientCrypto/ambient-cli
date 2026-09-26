@@ -202,12 +202,26 @@ export function flattenNativeToolTurns(messages: Msg[]): Msg[] {
         out[out.length - 1] = { role: "user", content: `${prev.content}\n\n${result}` };
       } else out.push({ role: "user", content: result });
       lastWasResult = true;
+    } else if (m.role === "user" && lastWasResult) {
+      // The next request right after the results (a run that stopped before answering): one user turn,
+      // results first, so strict chat templates still see user and assistant alternate.
+      const prev = out[out.length - 1] as Msg;
+      out[out.length - 1] = { ...m, content: joinContent(prev.content, m.content) };
+      lastWasResult = false;
     } else {
       out.push(m);
       lastWasResult = false;
     }
   }
   return out;
+}
+
+/** Two message contents as one: plain text joined, or content parts kept in order. */
+function joinContent(a: unknown, b: unknown): unknown {
+  if (typeof a === "string" && typeof b === "string") return `${a}\n\n${b}`;
+  const parts = (c: unknown) =>
+    typeof c === "string" ? [{ type: "text", text: c }] : Array.isArray(c) ? c : [];
+  return [...parts(a), ...parts(b)];
 }
 
 /**

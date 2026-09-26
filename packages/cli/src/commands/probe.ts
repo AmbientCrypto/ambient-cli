@@ -38,9 +38,8 @@ export function probeCallValid(argumentsText: string): boolean {
     const args = JSON.parse(argumentsText) as unknown;
     if (!args || typeof args !== "object" || Array.isArray(args)) return false;
     const sum = (args as { sum?: unknown }).sum;
-    return typeof sum === "number"
-      ? Number.isInteger(sum)
-      : typeof sum === "string" && /^-?\d+$/.test(sum.trim());
+    // Exactly as declared: a model that sends numbers as strings breaks real tools' argument checks too.
+    return typeof sum === "number" && Number.isInteger(sum);
   } catch {
     return false;
   }

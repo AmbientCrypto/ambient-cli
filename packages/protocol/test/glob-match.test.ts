@@ -66,6 +66,14 @@ describe("compileGlob", () => {
     expect(Date.now() - started).toBeLessThan(1000);
   });
 
+  it("matches characters outside the basic plane whole", () => {
+    expect(compileGlob("📄.txt").test("📄.txt")).toBe(true);
+    expect(compileGlob("?.txt").test("📄.txt")).toBe(true);
+    expect(
+      compileGlob("docs/**/📄*", { doubleStarSlash: "optional-dirs" }).test("docs/a/📄b"),
+    ).toBe(true);
+  });
+
   it("can ignore case", () => {
     expect(compileGlob("SRC/*.TS", { caseInsensitive: true }).test("src/a.ts")).toBe(true);
     expect(compileGlob("SRC/*.TS").test("src/a.ts")).toBe(false);

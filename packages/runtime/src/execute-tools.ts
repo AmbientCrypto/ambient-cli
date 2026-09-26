@@ -363,12 +363,15 @@ async function runOne(
   }
 }
 
+/** How long a timed-out tool that changes things may take to stop before its time-out is reported. */
+const STOP_GRACE_MS = 5_000;
+
 /**
  * Run a tool's execute() bounded by its declared `timeoutPolicy.maximumMs`. The race guarantees the loop
  * proceeds at the deadline even if a badly-behaved tool ignores the abort signal (its promise then leaks,
  * but the run is not held hostage); a well-behaved tool cancels via the linked signal. No policy ⇒ no bound.
  */
-async function runBounded(
+export async function runBounded(
   tool: ToolDefinition,
   args: unknown,
   ctx: ToolContext,
@@ -384,12 +387,35 @@ async function runBounded(
   else outerSignal.addEventListener("abort", onOuterAbort, { once: true });
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    const running = Promise.resolve(tool.execute(args, { ...ctx, signal: linked.signal }));
     return await new Promise((resolve, reject) => {
+      const late = new Error(`tool '${tool.manifest.name}' exceeded its ${maxMs}ms limit`);
+      let timedOut = false;
+      let grace: ReturnType<typeof setTimeout> | undefined;
+      const settle = () => {
+        if (grace) clearTimeout(grace);
+      };
       timer = setTimeout(() => {
+        timedOut = true;
         linked.abort();
-        reject(new Error(`tool '${tool.manifest.name}' exceeded its ${maxMs}ms limit`));
+        if (isReadOnly(tool.manifest)) reject(late);
+        else {
+          // A tool that changes things gets a moment to stop (and undo) before the time-out is reported, so
+          // nothing it was writing lands after the model has been told it failed — and if it finishes in that
+          // moment after all, its real result is reported.
+          grace = setTimeout(() => reject(late), STOP_GRACE_MS);
+        }
       }, maxMs);
-      Promise.resolve(tool.execute(args, { ...ctx, signal: linked.signal })).then(resolve, reject);
+      running.then(
+        (value) => {
+          settle();
+          resolve(value);
+        },
+        (err) => {
+          settle();
+          reject(timedOut ? late : err);
+        },
+      );
     });
   } finally {
     if (timer) clearTimeout(timer);

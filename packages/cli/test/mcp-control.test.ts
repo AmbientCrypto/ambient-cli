@@ -212,3 +212,41 @@ describe("refresh after trust is taken back", () => {
     control.close();
   });
 });
+
+describe("a folder whose trust lapses mid-session", () => {
+  it("loses its servers the next time tools are handed out", async () => {
+    let trusted = true;
+    let connects = 0;
+    const tool = { manifest: { name: "mcp__proj__t" } };
+    const connectImpl = async (_ws: string, o: { approveServer?: () => Promise<boolean> }) => {
+      connects++;
+      const allowed = (await o.approveServer?.()) === true;
+      return {
+        tools: allowed ? [tool] : [],
+        currentTools: () => (allowed ? [tool] : []),
+        prompts: [],
+        getPrompt: async () => "",
+        notices: [],
+        close: () => {},
+        servers: allowed
+          ? [{ name: "proj", source: "project", transport: "stdio", state: "connected", tools: 1 }]
+          : [],
+      } as unknown as McpConnection;
+    };
+    const control = makeMcpControl({
+      workspaceRoot: ws,
+      connect: { approveServer: async () => trusted },
+      store: makeTokenStore({ platform: "linux", configDir: ws }),
+      connectImpl: connectImpl as never,
+      projectTrusted: () => trusted,
+    });
+    await control.start();
+    expect(control.tools()).toHaveLength(1);
+    trusted = false; // e.g. its settings file changed
+    expect(control.tools()).toEqual([]);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(connects).toBe(2);
+    expect(control.tools()).toEqual([]);
+    control.close();
+  });
+});

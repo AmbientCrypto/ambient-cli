@@ -291,4 +291,22 @@ describe("native tool history sent to an assisted model", () => {
     expect(out.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
     expect(out[2]?.content).toBe("Result of read:\nX\n\nResult of grep:\nY");
   });
+
+  it("folds the next request into the results when no answer came between them", async () => {
+    const { flattenNativeToolTurns } = await import("../src/agent-support.js");
+    const out = flattenNativeToolTurns([
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: "a", name: "read", args: {}, rawArgs: "{}" }],
+      },
+      { role: "tool", toolCallId: "a", content: "X" },
+      { role: "user", content: [{ type: "text", text: "now fix it" }] },
+    ] as never);
+    expect(out.map((m) => m.role)).toEqual(["assistant", "user"]);
+    expect(out[1]?.content).toEqual([
+      { type: "text", text: "Result of read:\nX" },
+      { type: "text", text: "now fix it" },
+    ]);
+  });
 });

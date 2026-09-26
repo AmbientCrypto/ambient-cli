@@ -182,6 +182,7 @@ export async function runTui(opts: TuiOptions): Promise<void> {
   const skipMcp = opts.noMcp || process.env.AMBIENT_NO_MCP === "1";
   const mcp = makeMcpControl({
     workspaceRoot: cwd,
+    projectTrusted: () => settings.projectTrusted(),
     connect: {
       // A project's own servers connect once the project's settings are trusted (/trust).
       approveServer: async () => settings.projectTrusted(),

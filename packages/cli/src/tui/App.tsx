@@ -441,6 +441,8 @@ export function App(deps: AppDeps): ReactNode {
   const customCommands = useMemo(() => {
     const palette: SlashCommand[] = [];
     const bodies = new Map<string, CustomCommand>();
+    // `/skill-name` shortcuts: a fixed instruction to load the skill (the skill tool checks it when loading).
+    const skillShortcuts = new Set<string>();
     try {
       const plugins = { projectSettings: folderTrusted };
       for (const c of discoverCommands(deps.workspaceRoot, undefined, plugins)) {
@@ -472,8 +474,9 @@ export function App(deps: AppDeps): ReactNode {
         body: `Use the "${sk.name}" skill: load it with the skill tool and follow its instructions.\n\n$ARGUMENTS`,
         source: "user",
       });
+      skillShortcuts.add(name);
     }
-    return { palette, bodies };
+    return { palette, bodies, skillShortcuts };
   }, [deps.workspaceRoot, skills, folderTrusted]);
   // MCP prompts join the menu as `/mcp__server__prompt` once their servers connect (in the background).
   const commandPalette = [...customCommands.palette, ...(deps.mcp?.promptCommands() ?? [])];
@@ -1695,10 +1698,21 @@ export function App(deps: AppDeps): ReactNode {
           setBuffer("");
           // Read the command file again now: what runs must be what's on disk and trusted today, not the copy
           // loaded when the session started (a branch checkout can change it in between).
+          // A command no longer found (its file changed, or the folder is no longer trusted) doesn't run from
+          // the old copy; only a `/skill-name` shortcut, which is fixed text, is used as it is.
           const current =
             discoverCommands(deps.workspaceRoot, undefined, {
               projectSettings: deps.settings?.projectTrusted() === true,
-            }).find((c) => `/${c.name}` === command.name) ?? body;
+            }).find((c) => `/${c.name}` === command.name) ??
+            (customCommands.skillShortcuts.has(command.name) ? body : undefined);
+          if (!current) {
+            dispatch({
+              t: "notice",
+              level: "warn",
+              text: `${command.name} isn't available any more — its file changed, or this folder's settings are no longer trusted (/trust)`,
+            });
+            break;
+          }
           void runTaskRef.current?.(
             expandSlashCommand(current, splitArgs(arg), {
               workspaceRoot: deps.workspaceRoot,

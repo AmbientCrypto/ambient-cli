@@ -209,6 +209,10 @@ describe("write when the file appears meanwhile", () => {
     const made = { dev: mine.dev, ino: mine.ino === theirs.ino ? mine.ino + 1 : mine.ino };
     expect(await restore(n, false, made)).toBe(false);
     expect(readFileSync(n.abs, "utf8")).toBe("theirs");
+    // The file this call made, edited in place meanwhile: kept.
+    expect(await restore(n, false, { dev: theirs.dev, ino: theirs.ino })).toBe(false);
+    expect(readFileSync(n.abs, "utf8")).toBe("theirs");
+    writeFileSync(n.abs, "x"); // still holding what this call wrote: removed
     expect(await restore(n, false, { dev: theirs.dev, ino: theirs.ino })).toBe(true);
     expect(() => statSync(n.abs)).toThrow();
   });

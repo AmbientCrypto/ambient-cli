@@ -1016,9 +1016,16 @@ export class Agent {
             const overflowed = err.model ?? target;
             if (observedMax !== undefined)
               opts.capabilities?.learnCeiling?.(overflowed, observedMax);
+            // Its window as budgeted — catalog size and any ceiling learned from earlier overflows.
+            const overflowedModel = liveCatalog.find((m) => m.id === overflowed);
             const fitWindow = Math.min(
               budget.contextWindow,
-              liveCatalog.find((m) => m.id === overflowed)?.contextLength ?? budget.contextWindow,
+              overflowedModel
+                ? budgetFromCatalog(
+                    overflowedModel,
+                    opts.capabilities?.learnedCeiling?.(overflowed),
+                  ).contextWindow
+                : budget.contextWindow,
               observedMax ?? budget.contextWindow,
             );
             const reduced = await reduceContext(

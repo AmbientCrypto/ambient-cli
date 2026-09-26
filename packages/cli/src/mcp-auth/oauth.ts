@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { type Server, createServer } from "node:http";
+import { visible } from "../agent/workspace-settings.js";
 import type { ServerAuthRecord, StoredClient, StoredTokens, TokenStore } from "./token-store.js";
 
 /**
@@ -33,7 +34,8 @@ const EXPIRY_MARGIN_MS = 60_000;
 
 export class McpAuthError extends Error {
   constructor(message: string) {
-    super(message);
+    // These messages carry text a sign-in server chose; its control characters are shown, never run.
+    super(visible(message));
     this.name = "McpAuthError";
   }
 }

@@ -78,6 +78,16 @@ describe("decide — hard refusal (workspace boundary)", () => {
 });
 
 describe("decide — grants (model cannot self-grant)", () => {
+  it("a grant from building doesn't carry into plan mode", () => {
+    const d = decide(
+      input("plan", ["read", "network"], { grants: [{ scope: "session", toolName: "edit" }] }),
+    );
+    expect(d.effect).toBe("deny");
+    const w = decide(
+      input("plan", ["write"], { grants: [{ scope: "session", toolName: "edit" }] }),
+    );
+    expect(w.effect).toBe("deny");
+  });
   it("a session grant for the tool allows without asking", () => {
     const d = decide(input("ask", ["write"], { grants: [{ scope: "session", toolName: "edit" }] }));
     expect(d.effect).toBe("allow");

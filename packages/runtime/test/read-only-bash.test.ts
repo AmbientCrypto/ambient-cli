@@ -161,3 +161,31 @@ describe.skipIf(process.platform === "win32")("the program a read-only command r
     }
   });
 });
+
+describe.skipIf(process.platform === "win32")("finding the program the way the shell does", () => {
+  it("skips a file that isn't executable, and probes with the git that was vetted", () => {
+    const { existsSync } = require("node:fs") as typeof import("node:fs");
+    const saved = process.env.PATH;
+    const realGit = (saved ?? "")
+      .split(":")
+      .map((d) => join(d, "git"))
+      .find((p) => existsSync(p));
+    const outside = join(dir, "other-bin");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "ls"), "not a program", { mode: 0o644 });
+    mkdirSync(join(ws, "bin"));
+    writeFileSync(join(ws, "bin", "ls"), "#!/bin/sh\necho gotcha\n", { mode: 0o755 });
+    const marker = join(dir, "fake-git-ran");
+    writeFileSync(join(ws, "bin", "git"), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+    try {
+      process.env.PATH = `${outside}:${join(ws, "bin")}:${saved}`;
+      expect(holds("ls")).toBe(false); // the shell would skip the non-executable and run the workspace's
+      if (realGit) {
+        holds(`${realGit} status`);
+        expect(existsSync(marker)).toBe(false);
+      }
+    } finally {
+      process.env.PATH = saved;
+    }
+  });
+});

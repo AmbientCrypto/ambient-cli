@@ -27,7 +27,9 @@ const notSlash = (ch: string) => ch !== "/";
 
 export function compileGlob(pattern: string, opts: GlobOptions = {}): GlobMatcher {
   const fold = (s: string) => (opts.caseInsensitive ? s.toLowerCase() : s);
-  const glob = fold(pattern);
+  // Whole characters on both sides (a path is read the same way below), so `📄.txt` matches `📄.txt` and `?`
+  // stands for one character, not half of one.
+  const glob = [...fold(pattern)];
   const states: State[] = [{ edges: [], skips: [] }];
   const add = () => states.push({ edges: [], skips: [] }) - 1;
   let cur = 0;

@@ -26,3 +26,12 @@ describe("sign-in requests", () => {
     await expect(res.text()).rejects.toThrow(/too large/);
   });
 });
+
+describe("sign-in errors", () => {
+  it("show a server's control characters instead of sending them to the terminal", async () => {
+    const { McpAuthError } = await import("../src/mcp-auth/oauth.js");
+    const e = new McpAuthError("the server refused the sign-in (\u001b[2Jgotcha)");
+    expect(e.message).not.toContain("\u001b");
+    expect(e.message).toContain("gotcha");
+  });
+});
