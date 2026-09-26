@@ -1,0 +1,54 @@
+Ambient CLI
+Copyright (c) 2026 Ambient (ambient.xyz)
+
+This product is an original, clean-room implementation. It is NOT a fork of any
+third-party coding agent. See ATTRIBUTION.md for the full record.
+
+================================================================================
+Attribution for reused *logic*, re-implemented clean-room from Ambient's OWN
+prior repositories (no third-party source is copied or vendored):
+================================================================================
+
+This software re-implements, in clean-room TypeScript, logic derived from the
+following repositories owned by Ambient:
+
+  * ambient-agents (Apache License 2.0)
+      Portions of the model-catalog data shapes / ranking and the live
+      conformance-probe cases were derived from ambient-agents. As required by
+      Section 4(d) of the Apache License 2.0, this NOTICE preserves that
+      attribution.
+
+  * ambient-code-bridge (MIT)
+      Ambient API contract + reliability policy (per-model output floors,
+      escalate-on-empty, 429 cold-vs-rate classification, overflow synthesis,
+      ready/cold warm-substitution, learned context ceilings).
+
+  * ambient-codex (MIT)
+      Live-catalog UX, per-model token budgets, structured-output fallback,
+      model-matrix conformance.
+
+  * ambient-desktop-export (MIT)
+      Capability-evidence precedence, context-window recovery, the compaction
+      ladder, and atomic-persistence *patterns*.
+
+In every case the logic was re-implemented from scratch in TypeScript for this
+project; the original sources are Ambient-owned. Their copyright and permission
+notices are retained by reference to the source repositories above.
+
+================================================================================
+Patterns (ideas, not code)
+================================================================================
+
+Design *patterns* — never source — were informed by public prior art: a
+Claude-Code-style permission ladder, aider-style token-budgeted repo maps,
+event-core/runtime-model-discovery patterns common to OSS coding agents, and the
+Karpathy "LLM-Wiki" concept. No code was copied from any of these; the naming and
+mode vocabulary that overlap with other tools are non-protectable conventions.
+
+================================================================================
+Third-party runtime dependencies
+================================================================================
+
+At runtime this software depends only on ordinary open-source libraries (React,
+Ink, Zod, undici, string-width, smol-toml, yaml, and their transitive dependencies), each under its own
+license. It ships no competitor runtime or binary.

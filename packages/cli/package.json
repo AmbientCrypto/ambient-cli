@@ -1,0 +1,41 @@
+{
+  "name": "@amb/cli",
+  "version": "1.0.1",
+  "type": "module",
+  "bin": {
+    "ambient": "./dist/amb.js",
+    "amb": "./dist/amb.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@amb/ambient-api": "workspace:*",
+    "@amb/capabilities": "workspace:*",
+    "@amb/context": "workspace:*",
+    "@amb/evals": "workspace:*",
+    "@amb/mcp": "workspace:*",
+    "@amb/permissions": "workspace:*",
+    "@amb/protocol": "workspace:*",
+    "@amb/reliability": "workspace:*",
+    "@amb/runtime": "workspace:*",
+    "@amb/sessions": "workspace:*",
+    "@amb/tools-core": "workspace:*",
+    "cross-spawn": "^7.0.6",
+    "ink": "^7.1.1",
+    "react": "^19.3.0",
+    "string-width": "^8.2.2",
+    "undici": "^6.21.0",
+    "unpdf": "1.8.1",
+    "yaml": "^2.9.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "ink-testing-library": "^4.0.0",
+    "react-devtools-core": "^8.0.0"
+  }
+}

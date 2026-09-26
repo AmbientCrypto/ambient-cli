@@ -1,0 +1,8 @@
+# Keep line endings LF in the repository on every OS (Windows checkouts included), so fixtures, snapshots
+# and the formatter behave the same everywhere.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.gif binary
+*.webp binary
+*.tgz binary

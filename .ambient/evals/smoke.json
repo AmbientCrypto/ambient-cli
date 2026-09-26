@@ -1,0 +1,129 @@
+{
+  "name": "smoke",
+  "tasks": [
+    {
+      "id": "adds-a-function",
+      "prompt": "Create a file util.ts that exports a function `add(a: number, b: number): number` returning a + b. Do not add anything else.",
+      "checks": [
+        {
+          "kind": "completed"
+        },
+        {
+          "kind": "file_exists",
+          "path": "util.ts"
+        },
+        {
+          "kind": "file_contains",
+          "path": "util.ts",
+          "text": "export"
+        }
+      ]
+    },
+    {
+      "id": "fixes-a-failing-test",
+      "prompt": "The test in sum.test.mjs fails because sum.mjs is wrong. Fix sum.mjs so the test passes. Do not change the test.",
+      "setup": {
+        "files": [
+          {
+            "path": "sum.mjs",
+            "content": "export const sum = (a, b) => a - b;\n"
+          },
+          {
+            "path": "sum.test.mjs",
+            "content": "import { sum } from './sum.mjs';\nif (sum(2, 2) !== 4) { console.error('FAIL'); process.exit(1); }\nconsole.log('ok');\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "kind": "completed"
+        },
+        {
+          "kind": "command_succeeds",
+          "command": "node sum.test.mjs"
+        }
+      ]
+    },
+    {
+      "id": "renames-across-files",
+      "prompt": "Rename the function `calc` to `computeTotal` everywhere in this project (its definition and every use). Keep behaviour the same.",
+      "setup": {
+        "files": [
+          {
+            "path": "lib.mjs",
+            "content": "export function calc(items) {\n  return items.reduce((s, x) => s + x, 0);\n}\n"
+          },
+          {
+            "path": "main.mjs",
+            "content": "import { calc } from './lib.mjs';\nconst t = calc([1, 2, 3]);\nif (t !== 6) process.exit(1);\nconsole.log('ok', t);\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "kind": "completed"
+        },
+        {
+          "kind": "command_succeeds",
+          "command": "node main.mjs"
+        },
+        {
+          "kind": "file_contains",
+          "path": "lib.mjs",
+          "text": "computeTotal"
+        },
+        {
+          "kind": "file_contains",
+          "path": "main.mjs",
+          "text": "computeTotal"
+        }
+      ]
+    },
+    {
+      "id": "fixes-an-off-by-one",
+      "prompt": "range.mjs should return the numbers from start to end INCLUSIVE, but check.mjs fails. Fix range.mjs only.",
+      "setup": {
+        "files": [
+          {
+            "path": "range.mjs",
+            "content": "export function range(start, end) {\n  const out = [];\n  for (let i = start; i < end; i++) out.push(i);\n  return out;\n}\n"
+          },
+          {
+            "path": "check.mjs",
+            "content": "import { range } from './range.mjs';\nconst r = range(1, 3).join(',');\nif (r !== '1,2,3') { console.error('got', r); process.exit(1); }\nconsole.log('ok');\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "kind": "completed"
+        },
+        {
+          "kind": "command_succeeds",
+          "command": "node check.mjs"
+        }
+      ]
+    },
+    {
+      "id": "answers-from-the-code",
+      "prompt": "What port does server.mjs listen on? Answer with just the number.",
+      "setup": {
+        "files": [
+          {
+            "path": "server.mjs",
+            "content": "const PORT = Number(process.env.PORT ?? 8417);\nexport const listen = () => PORT;\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "kind": "completed"
+        },
+        {
+          "kind": "output_contains",
+          "text": "8417"
+        }
+      ]
+    }
+  ]
+}

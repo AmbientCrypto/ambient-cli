@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.env
+# Ignore all .ambient/ runtime state (sessions, blobs, MEMORY.md) …
+.ambient/*
+# … but eval suites ARE versioned repo config (the ship gate). Baselines stay local (model-run specific).
+!.ambient/evals/
+.ambient/evals/*.baseline.json
+coverage/
+*.sqlite
+*.tsbuildinfo
+dist-pack/
