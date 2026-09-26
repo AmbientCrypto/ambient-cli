@@ -195,3 +195,14 @@ describe("isReadOnlyCommand — shell expansion is never auto-approved", () => {
     expect(isReadOnlyCommand(cmd)).toBe(true);
   });
 });
+
+describe("a command too long to read in full", () => {
+  it("is never read-only, and is flagged as a risk", async () => {
+    const { classifyToolRisk } = await import("../src/index.js");
+    const padded = `echo ${" ".repeat(16_000)}; touch marker`;
+    expect(isReadOnlyCommand(padded)).toBe(false);
+    expect(classifyToolRisk("bash", { command: padded }).reasons.join(" ")).toContain(
+      "too long to check in full",
+    );
+  });
+});

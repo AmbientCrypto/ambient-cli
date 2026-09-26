@@ -9,3 +9,4 @@ export * from "./schemas/tool.js";
 export * from "./schemas/permission.js";
 export * from "./schemas/errors.js";
 export * from "./schemas/event.js";
+export * from "./glob-match.js";

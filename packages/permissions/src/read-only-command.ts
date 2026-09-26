@@ -1,5 +1,5 @@
 import type { Effect } from "@amb/protocol";
-import { baseName, parseShellCommands } from "./shell-tokens.js";
+import { MAX_CMD_CHARS, baseName, parseShellCommands } from "./shell-tokens.js";
 
 /**
  * A conservative classifier that recognizes a bash command as PURELY read-only, so the permission engine can
@@ -180,6 +180,8 @@ function hasDangerousMeta(command: string): boolean {
 
 /** True iff `command` is composed ENTIRELY of read-only invocations (see the rules above). */
 export function isReadOnlyCommand(command: string): boolean {
+  // The parser stops reading at MAX_CMD_CHARS; anything past it would run unchecked.
+  if (command.length > MAX_CMD_CHARS) return false;
   if (hasDangerousMeta(command)) return false;
   // Escapes are where a simple tokenizer and the real shell disagree about quoting (`"\"'"` ends differently
   // for each), so a command with any backslash is never downgraded — it just asks.

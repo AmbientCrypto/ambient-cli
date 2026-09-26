@@ -6,7 +6,7 @@ import { bashOutputTool, killShellTool } from "./background-tools.js";
 import { bashTool } from "./bash.js";
 import { diagnosticsTool } from "./diagnostics.js";
 import { editTool } from "./edit.js";
-import { globToRegExp, globTool } from "./glob.js";
+import { globMatcher, globTool } from "./glob.js";
 import { grepTool } from "./grep.js";
 import { listTool } from "./list.js";
 import { notebookEditTool } from "./notebook-edit.js";
@@ -25,7 +25,7 @@ export {
   readTool,
   listTool,
   globTool,
-  globToRegExp,
+  globMatcher,
   grepTool,
   writeTool,
   editTool,

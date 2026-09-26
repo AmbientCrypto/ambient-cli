@@ -52,9 +52,12 @@ export function parseHooks(
     const groups = (hooks as Record<string, unknown>)[event];
     if (!Array.isArray(groups)) continue;
     for (const g of groups) {
+      // Hand-written (or hostile) settings may hold anything; skip what isn't an object.
+      if (!g || typeof g !== "object") continue;
       const group = g as { matcher?: unknown; hooks?: unknown };
       const matcher = typeof group.matcher === "string" ? group.matcher : "";
       for (const h of Array.isArray(group.hooks) ? group.hooks : []) {
+        if (!h || typeof h !== "object") continue;
         const hook = h as { type?: unknown; command?: unknown; timeout?: unknown };
         if (hook.type !== "command" || typeof hook.command !== "string" || !hook.command.trim())
           continue;

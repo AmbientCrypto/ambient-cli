@@ -1,4 +1,4 @@
-import { loadSkill } from "@amb/context";
+import { discoverSkills, loadSkill } from "@amb/context";
 import type { ToolContext, ToolDefinition } from "@amb/protocol";
 import { z } from "zod";
 import { resolveInWorkspace } from "../paths.js";
@@ -37,9 +37,19 @@ export const skillTool: ToolDefinition<z.infer<typeof Input>, z.infer<typeof Out
   inputSchema: Input,
   outputSchema: Output,
   async execute(input, ctx: ToolContext) {
-    const loaded = loadSkill(ctx.workspaceRoot, input.name, undefined, {
-      projectSettings: ctx.projectPlugins === true,
-    });
+    const plugins = { projectSettings: ctx.projectPlugins === true };
+    // A skill marked `disable-model-invocation` is for you to run (/name); the model can't load it by name.
+    const meta = discoverSkills(ctx.workspaceRoot, undefined, plugins).find(
+      (s) => s.name === input.name,
+    );
+    if (meta?.disableModelInvocation) {
+      return {
+        name: input.name,
+        found: false,
+        body: `"${input.name}" is a skill only the user runs (/${input.name}); it isn't available to you.`,
+      };
+    }
+    const loaded = loadSkill(ctx.workspaceRoot, input.name, undefined, plugins);
     if (loaded === undefined) {
       return {
         name: input.name,

@@ -182,10 +182,102 @@ describe("write when the file appears meanwhile", () => {
     const { restore } = await import("../src/text-file.js");
     const a = { abs: join(ws, "a.txt"), path: "a.txt", before: "old\n", after: "new\n" };
     writeFileSync(a.abs, "an editor's change\n");
-    expect(await restore(a, false, false)).toBe(false);
+    expect(await restore(a, false, undefined)).toBe(false);
     expect(readFileSync(a.abs, "utf8")).toBe("an editor's change\n");
     writeFileSync(a.abs, "new\n"); // still what the tool wrote → goes back
-    expect(await restore(a, false, false)).toBe(true);
+    expect(await restore(a, false, undefined)).toBe(true);
     expect(readFileSync(a.abs, "utf8")).toBe("old\n");
+  });
+
+  it("puts back a cut-short write, but not a file someone else rewrote, or replaced after creating", async () => {
+    const { restore } = await import("../src/text-file.js");
+    const { statSync, unlinkSync } = await import("node:fs");
+    const a = { abs: join(ws, "a.txt"), path: "a.txt", before: "old\n", after: "brand new\n" };
+    writeFileSync(a.abs, "brand"); // the failed write got this far
+    expect(await restore(a, true, undefined)).toBe(true);
+    expect(readFileSync(a.abs, "utf8")).toBe("old\n");
+    writeFileSync(a.abs, "someone else's\n"); // not a prefix of what we wrote
+    expect(await restore(a, true, undefined)).toBe(false);
+    expect(readFileSync(a.abs, "utf8")).toBe("someone else's\n");
+
+    const n = { abs: join(ws, "n.txt"), path: "n.txt", before: undefined, after: "x" };
+    writeFileSync(n.abs, "x");
+    const mine = statSync(n.abs);
+    unlinkSync(n.abs);
+    writeFileSync(n.abs, "theirs"); // replaced meanwhile: a different file at the same path
+    const theirs = statSync(n.abs);
+    const made = { dev: mine.dev, ino: mine.ino === theirs.ino ? mine.ino + 1 : mine.ino };
+    expect(await restore(n, false, made)).toBe(false);
+    expect(readFileSync(n.abs, "utf8")).toBe("theirs");
+    expect(await restore(n, false, { dev: theirs.dev, ino: theirs.ino })).toBe(true);
+    expect(() => statSync(n.abs)).toThrow();
+  });
+});
+
+describe("glob stays inside the workspace", () => {
+  it("refuses a pattern that climbs out", async () => {
+    const { globTool } = await import("../src/tools/glob.js");
+    await expect(globTool.execute({ pattern: "../**/*.ts", limit: 10 }, ctx())).rejects.toThrow(
+      /`\.\.` isn't allowed/,
+    );
+  });
+});
+
+describe("grep without ripgrep", () => {
+  const withoutRipgrep = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const saved = process.env.PATH;
+    process.env.PATH = "/nonexistent";
+    try {
+      return await fn();
+    } finally {
+      process.env.PATH = saved;
+    }
+  };
+
+  it("searches a file named directly", async () => {
+    const { grepTool } = await import("../src/tools/grep.js");
+    mkdirSync(join(ws, "src"));
+    writeFileSync(join(ws, "src", "a.ts"), "one\nneedle here\n");
+    const r = await withoutRipgrep(() =>
+      grepTool.execute({ pattern: "needle", path: "src/a.ts", limit: 10 }, ctx()),
+    );
+    expect(r.matches).toEqual([{ file: "src/a.ts", line: 2, text: "needle here" }]);
+  });
+
+  it("stops a pattern that backtracks forever instead of freezing", async () => {
+    const { grepTool } = await import("../src/tools/grep.js");
+    writeFileSync(join(ws, "a.txt"), `${"a".repeat(40)}b\n`);
+    const started = Date.now();
+    await expect(
+      withoutRipgrep(() => grepTool.execute({ pattern: "(a+)+$", path: ".", limit: 10 }, ctx())),
+    ).rejects.toThrow(/takes too long to match/);
+    expect(Date.now() - started).toBeLessThan(10_000);
+  }, 15_000);
+});
+
+describe("tools the user controls", () => {
+  it("a stopped edit changes nothing", async () => {
+    writeFileSync(join(ws, "a.txt"), "alpha\n");
+    const stopped = new AbortController();
+    stopped.abort();
+    await expect(
+      editTool.execute(
+        { path: "a.txt", oldString: "alpha", newString: "ALPHA", replaceAll: false },
+        { ...ctx(), signal: stopped.signal },
+      ),
+    ).rejects.toThrow();
+    expect(readFileSync(join(ws, "a.txt"), "utf8")).toBe("alpha\n");
+  });
+
+  it("the model can't load a skill marked for the user only", async () => {
+    const { skillTool } = await import("../src/tools/skill.js");
+    mkdirSync(join(ws, ".claude", "skills", "release"), { recursive: true });
+    writeFileSync(
+      join(ws, ".claude", "skills", "release", "SKILL.md"),
+      "---\nname: release\ndescription: Ship it\ndisable-model-invocation: true\n---\nSECRET STEPS",
+    );
+    const r = await skillTool.execute({ name: "release" }, ctx());
+    expect(r.found).toBe(false);
+    expect(r.body).not.toContain("SECRET STEPS");
   });
 });

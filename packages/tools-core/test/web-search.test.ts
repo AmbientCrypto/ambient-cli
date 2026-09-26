@@ -89,3 +89,40 @@ describe("makeWebSearchTool", () => {
     expect(out.note).toBeTruthy();
   });
 });
+
+describe("web_search's connection", () => {
+  it("goes to the vetted address and reads no more than the cap", async () => {
+    const pinnedTo: string[][] = [];
+    let chunksRead = 0;
+    const chunk = new TextEncoder().encode("x".repeat(64 * 1024));
+    const tool = makeWebSearchTool({
+      env: { AMBIENT_SEARCH_URL: "https://search.example/search?q={query}&format=json" },
+      lookup: async () => [{ address: "93.184.216.34" }],
+      makeDispatcher: (addrs) => {
+        pinnedTo.push(addrs.map((a) => a.address));
+        return { close: async () => {} };
+      },
+      fetchImpl: async () => ({
+        status: 200,
+        headers: { get: () => "application/json" },
+        arrayBuffer: async () => {
+          throw new Error("the body must be streamed, not buffered whole");
+        },
+        body: {
+          getReader: () => ({
+            read: async () => {
+              chunksRead++;
+              return { done: false, value: chunk }; // an endless body
+            },
+            cancel: async () => {},
+          }),
+        },
+      }),
+    });
+    const ctx = { signal: new AbortController().signal } as ToolContext;
+    const r = await tool.execute({ query: "zod", limit: 3 }, ctx);
+    expect(pinnedTo).toEqual([["93.184.216.34"]]);
+    expect(chunksRead).toBeLessThan(40); // ~2 MB, then it stops
+    expect(r.results).toEqual([]);
+  });
+});

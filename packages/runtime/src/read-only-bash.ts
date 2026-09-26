@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { classifyToolRisk, isWithinWorkspace, parseShellCommands } from "@amb/permissions";
 import { fromGitBashPath } from "@amb/tools-core";
 
@@ -24,6 +24,9 @@ export function readOnlyBashHolds(
   if (classifyToolRisk("bash", { command }).level !== "none") return false;
   const root = ctx.workspaceRoot;
   for (const seg of parseShellCommands(command)) {
+    // The program itself must come from outside the workspace: a repository can ship its own `bin/git` or
+    // `ls`, and a PATH that includes a project folder (direnv, `./node_modules/.bin`) would run it.
+    if (!programOutsideWorkspace(seg.argv[0] ?? "", root)) return false;
     const name = seg.argv[0]?.split("/").pop() ?? "";
     const args = seg.argv.slice(1);
     if (FOLLOWS_LINKS[name]?.(args)) return false;
@@ -36,6 +39,45 @@ export function readOnlyBashHolds(
     if (name === "git" && !gitIsInert(root, ctx.readDenied !== undefined, args)) return false;
   }
   return true;
+}
+
+/**
+ * Whether the program a command word runs lives outside the workspace: an absolute path is checked where it
+ * really is; a bare name is looked up on PATH the way the shell will (the first folder holding it wins, and a
+ * relative PATH folder counts as the workspace). A name found nowhere is a shell builtin (`echo`, `cd`).
+ */
+function programOutsideWorkspace(word: string, root: string): boolean {
+  if (word.includes("/")) return !insideWorkspace(word, root);
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    const candidate = join(isAbsolute(dir) ? dir : resolve(root, dir), word);
+    let isFile = false;
+    try {
+      isFile = statSync(candidate).isFile();
+    } catch {
+      continue;
+    }
+    if (!isFile) continue;
+    return isAbsolute(dir) && !insideWorkspace(candidate, root);
+  }
+  return true;
+}
+
+/** Whether a path (followed through symlinks where it exists) is inside the workspace. */
+function insideWorkspace(path: string, root: string): boolean {
+  let real = path;
+  try {
+    real = realpathSync(path);
+  } catch {
+    // doesn't exist (yet): judge the path as written
+  }
+  const top = (() => {
+    try {
+      return realpathSync(root);
+    } catch {
+      return root;
+    }
+  })();
+  return isWithinWorkspace(top, real) || isWithinWorkspace(root, resolve(path));
 }
 
 /** What a word could name as a path: itself, an option's `=value`, or a short option's glued value. */

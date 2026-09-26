@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import { baseName, parseShellCommands } from "./shell-tokens.js";
+import { MAX_CMD_CHARS, baseName, parseShellCommands } from "./shell-tokens.js";
 
 /**
  * A LOCAL, deterministic risk classifier for a tool call's INPUT — the input-side complement
@@ -241,8 +241,10 @@ const hasForce = (flags: string[]) =>
 
 function classifyBash(command: string): RiskAssessment {
   const risk = new Risk();
-  const bounded = command.length > 16_000 ? command.slice(0, 16_000) : command;
+  const bounded = command.length > MAX_CMD_CHARS ? command.slice(0, MAX_CMD_CHARS) : command;
   if (FORK_BOMB.test(bounded)) risk.add("critical", "looks like a fork bomb");
+  // Only the start of an overlong command is read, so what follows can't be judged safe.
+  if (command.length > MAX_CMD_CHARS) risk.add("elevated", "too long to check in full");
 
   windowsCommandRisk(bounded, risk);
   const cmds = parseShellCommands(command);

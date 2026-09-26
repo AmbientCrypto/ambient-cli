@@ -1,5 +1,10 @@
 import { join } from "node:path";
-import type { ToolContext, ToolDefinition } from "@amb/protocol";
+import {
+  type GlobMatcher,
+  type ToolContext,
+  type ToolDefinition,
+  compileGlob,
+} from "@amb/protocol";
 import { z } from "zod";
 import { resolveInWorkspace } from "../paths.js";
 import { walkFiles } from "../walk-files.js";
@@ -38,24 +43,9 @@ export function patternStart(pattern: string): string {
   return literal.join("/");
 }
 
-/** Translate a simple glob (`**`, `*`, `?`) into a RegExp anchored to the whole relative path. */
-export function globToRegExp(pattern: string): RegExp {
-  let re = "";
-  for (let i = 0; i < pattern.length; i++) {
-    const c = pattern[i];
-    if (c === "*") {
-      if (pattern[i + 1] === "*") {
-        re += ".*";
-        i += 1;
-        if (pattern[i + 1] === "/") i += 1;
-      } else {
-        re += "[^/]*";
-      }
-    } else if (c === "?") re += "[^/]";
-    else if (c && "\\^$.|+()[]{}".includes(c)) re += `\\${c}`;
-    else re += c;
-  }
-  return new RegExp(`^${re}$`);
+/** A simple glob (`**`, `*`, `?`) matched against the whole relative path, in linear time. */
+export function globMatcher(pattern: string): GlobMatcher {
+  return compileGlob(pattern, { doubleStarSlash: "any" });
 }
 
 export const globTool: ToolDefinition<z.infer<typeof Input>, z.infer<typeof Output>> = {
@@ -80,8 +70,14 @@ export const globTool: ToolDefinition<z.infer<typeof Input>, z.infer<typeof Outp
     const pattern = (
       process.platform === "win32" ? input.pattern.replace(/\\/g, "/") : input.pattern
     ).replace(/^\/+/, "");
-    const re = globToRegExp(pattern);
+    // Patterns name files inside the workspace: `..` would walk out of it.
+    if (pattern.split("/").includes("..")) {
+      throw new Error("glob patterns are relative to the workspace — `..` isn't allowed");
+    }
+    const re = globMatcher(pattern);
     const start = patternStart(pattern);
+    // Where the walk starts must itself be inside the workspace (a link there could lead out).
+    if (start) resolveInWorkspace(ctx.workspaceRoot, start);
     const matches: string[] = [];
     let truncated = false;
     let timedOut = false;

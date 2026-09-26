@@ -92,7 +92,7 @@ export const applyPatchTool: ToolDefinition<z.infer<typeof Input>, z.infer<typeo
 
     // Phase 2 — write all validated files; a failed write puts back the ones already written.
     for (const s of staged) ctx.checkpoint?.(s.before); // save each file's pre-image for `amb rewind`
-    await writeAllOrRestore(staged);
+    await writeAllOrRestore(staged, ctx.signal);
     const files = [];
     for (const s of staged) {
       files.push({

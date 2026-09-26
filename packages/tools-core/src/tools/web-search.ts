@@ -1,8 +1,17 @@
 import { promises as dns } from "node:dns";
 import type { ToolContext, ToolDefinition } from "@amb/protocol";
+import { fetch as undiciFetch } from "undici";
 import { z } from "zod";
 import type { LookupFn } from "../net/url-guard.js";
 import { assertFetchableUrl, assertHostAllowed } from "../net/url-guard.js";
+import {
+  type FetchResponse,
+  type MakeDispatcher,
+  defaultMakeDispatcher,
+  readCapped,
+} from "./web-fetch.js";
+
+type PinnedDispatcher = NonNullable<ReturnType<MakeDispatcher>>;
 
 const DEFAULT_TIMEOUT_MS = 12_000;
 const MAX_BODY_BYTES = 2_000_000;
@@ -122,12 +131,6 @@ export function resolveProvider(query: string, env: Record<string, string | unde
   };
 }
 
-interface FetchResponse {
-  status: number;
-  headers: { get(name: string): string | null };
-  arrayBuffer(): Promise<ArrayBuffer>;
-  body?: { cancel?(): Promise<void> } | null;
-}
 type FetchImpl = (url: string, init: Record<string, unknown>) => Promise<FetchResponse>;
 
 async function runWebSearch(
@@ -136,6 +139,7 @@ async function runWebSearch(
   fetchImpl: FetchImpl,
   lookup: LookupFn,
   env: Record<string, string | undefined>,
+  makeDispatcher: MakeDispatcher,
 ): Promise<Output> {
   const limit = Math.min(input.limit ?? MAX_RESULTS, MAX_RESULTS);
   const provider = resolveProvider(input.query, env);
@@ -144,18 +148,21 @@ async function runWebSearch(
   ctx.signal.addEventListener("abort", onAbort);
   if (ctx.signal.aborted) ac.abort();
   const timer = setTimeout(() => ac.abort(), DEFAULT_TIMEOUT_MS);
+  let dispatcher: PinnedDispatcher | undefined;
   try {
     const target = assertFetchableUrl(provider.url);
-    await assertHostAllowed(target.hostname, lookup); // SSRF gate (same as web_fetch)
+    // SSRF gate (same as web_fetch), and the connection goes to exactly the addresses it vetted.
+    const vetted = await assertHostAllowed(target.hostname, lookup);
+    dispatcher = makeDispatcher(vetted);
     const res = await fetchImpl(target.toString(), {
       redirect: "manual",
       signal: ac.signal,
       headers: { "user-agent": USER_AGENT, accept: "text/html,application/json,*/*" },
+      ...(dispatcher ? { dispatcher } : {}),
     });
-    const buf = new Uint8Array(await res.arrayBuffer());
-    const body = new TextDecoder("utf-8", { fatal: false }).decode(
-      buf.length > MAX_BODY_BYTES ? buf.subarray(0, MAX_BODY_BYTES) : buf,
-    );
+    // Read no more than the cap, however much the server sends.
+    const { bytes } = await readCapped(res, MAX_BODY_BYTES);
+    const body = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
     const results = provider.parse(body).slice(0, limit);
     return {
       query: input.query,
@@ -180,6 +187,7 @@ async function runWebSearch(
   } finally {
     clearTimeout(timer);
     ctx.signal.removeEventListener("abort", onAbort);
+    await dispatcher?.close?.();
   }
 }
 
@@ -194,9 +202,12 @@ export function makeWebSearchTool(deps?: {
   fetchImpl?: FetchImpl;
   lookup?: LookupFn;
   env?: Record<string, string | undefined>;
+  makeDispatcher?: MakeDispatcher;
 }): ToolDefinition<Input, Output> {
+  // undici's own fetch, so the pinned dispatcher is version-compatible (as in web_fetch).
   const fetchImpl: FetchImpl =
-    deps?.fetchImpl ?? ((url, init) => fetch(url, init) as unknown as Promise<FetchResponse>);
+    deps?.fetchImpl ?? ((url, init) => undiciFetch(url, init) as unknown as Promise<FetchResponse>);
+  const makeDispatcher = deps?.makeDispatcher ?? defaultMakeDispatcher;
   const lookup: LookupFn = deps?.lookup ?? ((host) => dns.lookup(host, { all: true }));
   const env = deps?.env ?? process.env;
   return {
@@ -213,7 +224,7 @@ export function makeWebSearchTool(deps?: {
     },
     inputSchema: Input,
     outputSchema: Output,
-    execute: (input, ctx) => runWebSearch(input, ctx, fetchImpl, lookup, env),
+    execute: (input, ctx) => runWebSearch(input, ctx, fetchImpl, lookup, env, makeDispatcher),
   };
 }
 

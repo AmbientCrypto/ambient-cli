@@ -1,11 +1,12 @@
 import { readFile, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
+import { Script, createContext } from "node:vm";
 import type { ToolContext, ToolDefinition } from "@amb/protocol";
 import { z } from "zod";
 import { resolveInWorkspace } from "../paths.js";
 import { findRipgrep, isGlob, ripgrepSearch } from "../ripgrep.js";
 import { walkFiles } from "../walk-files.js";
-import { globToRegExp } from "./glob.js";
+import { globMatcher } from "./glob.js";
 
 const Input = z.object({
   pattern: z.string().describe("Regular expression to search for"),
@@ -26,6 +27,39 @@ const MAX_FILE_BYTES = 2_000_000;
  *  pattern on a very long (e.g. minified) line can hang the synchronous event loop; bounding the input
  *  bounds the worst case. A match past this column on a single line is missed (an accepted grep tradeoff). */
 const MAX_LINE_CHARS = 5_000;
+
+/** How long the JavaScript search may spend matching one file's lines before giving up on the pattern. */
+const MATCH_BUDGET_MS = 2_000;
+
+async function* oneFile(rel: string): AsyncGenerator<string> {
+  yield rel;
+}
+
+/**
+ * The indexes of the lines `re` matches, at most `max`. A regex can backtrack for minutes and can't be
+ * interrupted from JavaScript, so the matching runs in a separate script context with a time limit; a
+ * pattern that exceeds it is reported instead of freezing ambient.
+ */
+function lineMatcher(re: RegExp): (lines: string[], max: number) => number[] {
+  const sandbox = createContext({ re, lines: [] as string[], max: 0, cap: MAX_LINE_CHARS });
+  const script = new Script(
+    "(() => { const hits = []; for (let i = 0; i < lines.length && hits.length < max; i++) { const l = lines[i]; if (re.test(l.length > cap ? l.slice(0, cap) : l)) hits.push(i); } return hits; })()",
+  );
+  return (lines, max) => {
+    sandbox.lines = lines;
+    sandbox.max = max;
+    try {
+      return [...(script.runInContext(sandbox, { timeout: MATCH_BUDGET_MS }) as number[])];
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ERR_SCRIPT_EXECUTION_TIMEOUT") {
+        throw new Error(
+          "this pattern takes too long to match (it backtracks heavily) — simplify it, e.g. avoid nested repeats like (a+)+",
+        );
+      }
+      throw err;
+    }
+  };
+}
 
 export const grepTool: ToolDefinition<z.infer<typeof Input>, z.infer<typeof Output>> = {
   manifest: {
@@ -74,13 +108,18 @@ export const grepTool: ToolDefinition<z.infer<typeof Input>, z.infer<typeof Outp
       });
       if (found) return { pattern: input.pattern, ...found };
     }
-    const globRe = input.glob && isGlob(input.glob) ? globToRegExp(input.glob) : undefined;
+    const globRe = input.glob && isGlob(input.glob) ? globMatcher(input.glob) : undefined;
     const globMatches = (rel: string) =>
       !input.glob ||
       (globRe
         ? globRe.test(input.glob.includes("/") ? rel : (rel.split("/").at(-1) ?? rel))
         : rel.endsWith(input.glob));
-    for await (const rel of walkFiles(root, { start: rootPrefix, signal: ctx.signal })) {
+    // An explicit file is searched on its own; a folder is walked.
+    const files = (await stat(base).catch(() => undefined))?.isFile()
+      ? oneFile(rootPrefix)
+      : walkFiles(root, { start: rootPrefix, signal: ctx.signal });
+    const matchLines = lineMatcher(re);
+    for await (const rel of files) {
       if (!globMatches(rel)) continue;
       if (ctx.readDenied?.(join(root, rel))) continue;
       ctx.signal.throwIfAborted();
@@ -94,16 +133,14 @@ export const grepTool: ToolDefinition<z.infer<typeof Input>, z.infer<typeof Outp
         continue;
       }
       const lines = content.split(/\r?\n/); // `$` anchors work on CRLF files too
-      for (let i = 0; i < lines.length; i++) {
+      for (const i of matchLines(lines, input.limit - matches.length)) {
         const full = lines[i] ?? "";
         const text = full.length > MAX_LINE_CHARS ? full.slice(0, MAX_LINE_CHARS) : full;
-        if (re.test(text)) {
-          matches.push({ file: rel, line: i + 1, text: text.slice(0, 400) });
-          if (matches.length >= input.limit) {
-            truncated = true;
-            return { pattern: input.pattern, matches, truncated };
-          }
-        }
+        matches.push({ file: rel, line: i + 1, text: text.slice(0, 400) });
+      }
+      if (matches.length >= input.limit) {
+        truncated = true;
+        return { pattern: input.pattern, matches, truncated };
       }
     }
     return { pattern: input.pattern, matches, truncated };

@@ -56,7 +56,7 @@ export const editTool: ToolDefinition<z.infer<typeof Input>, z.infer<typeof Outp
       input.path,
     );
     ctx.checkpoint?.(before); // save the pre-image for `amb rewind`
-    await writeAllOrRestore([{ abs, path: input.path, before, after }]);
+    await writeAllOrRestore([{ abs, path: input.path, before, after }], ctx.signal);
     return {
       path: input.path,
       operation: "modify" as const,

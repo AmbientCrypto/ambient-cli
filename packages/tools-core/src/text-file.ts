@@ -109,16 +109,23 @@ export interface PlannedWrite {
   after: string;
 }
 
+/** The identity of a file this call created, so a rollback removes only that file, never a replacement. */
+interface Created {
+  dev: number;
+  ino: number;
+}
+
 /** Write one file. A new file is created exclusively, so one that appeared meanwhile is never overwritten;
- *  `created` says whether this call made it (only then may a rollback remove it). */
-async function writeOne(f: PlannedWrite, state: { created: boolean }): Promise<void> {
+ *  `state.created` records the file this call made (only it may be removed by a rollback). */
+async function writeOne(f: PlannedWrite, state: { created?: Created }): Promise<void> {
   if (f.before !== undefined) {
     await writeFile(f.abs, f.after, "utf8");
     return;
   }
   const fh = await open(f.abs, "wx");
-  state.created = true;
   try {
+    const st = await fh.stat();
+    state.created = { dev: st.dev, ino: st.ino };
     await fh.writeFile(f.after, "utf8");
   } finally {
     await fh.close();
@@ -126,22 +133,33 @@ async function writeOne(f: PlannedWrite, state: { created: boolean }): Promise<v
 }
 
 /**
- * Put one file back. A file this call wrote goes back only while it still holds what was written — a change
- * made meanwhile by something else is left alone (returns false). The file whose write failed may be cut
- * short, so it goes back unless it already matches.
+ * Put one file back, touching it only while it still holds this call's own work: a file written in full
+ * goes back only if it still has what was written; the one whose write failed only if it holds a cut-short
+ * copy of it; a created file is removed only if it's still the file this call made. Anything else was
+ * changed meanwhile by something else and is left alone (returns false).
  */
 export async function restore(
   f: PlannedWrite,
   failed: boolean,
-  created: boolean,
+  created: Created | undefined,
 ): Promise<boolean> {
   if (f.before === undefined) {
-    if (created) await rm(f.abs, { force: true });
+    if (!created) return true; // never made it
+    const st = await stat(f.abs).catch(() => undefined);
+    if (!st) return true;
+    if (st.dev !== created.dev || st.ino !== created.ino) return false;
+    await rm(f.abs, { force: true });
     return true;
   }
-  const now = await readFile(f.abs, "utf8").catch(() => undefined);
-  if (now === f.before) return true;
-  if (!failed && now !== f.after) return false;
+  const now = await readFile(f.abs).catch(() => undefined);
+  if (now?.equals(Buffer.from(f.before, "utf8"))) return true;
+  const written = Buffer.from(f.after, "utf8");
+  const ours = failed
+    ? now !== undefined &&
+      now.length <= written.length &&
+      written.subarray(0, now.length).equals(now)
+    : now?.equals(written) === true;
+  if (!ours) return false;
   await writeFile(f.abs, f.before, "utf8");
   return true;
 }
@@ -151,16 +169,23 @@ export async function restore(
  * the one that failed, which a failed write can leave cut short — goes back to its earlier content before
  * the error is reported, so a change across several files lands whole or not at all.
  */
-export async function writeAllOrRestore(files: readonly PlannedWrite[]): Promise<void> {
-  const created = files.map(() => ({ created: false }));
+export async function writeAllOrRestore(
+  files: readonly PlannedWrite[],
+  signal?: AbortSignal,
+): Promise<void> {
+  // A tool that was stopped (Ctrl-C, or it ran past its time limit and was already reported as failed)
+  // must not change files afterwards.
+  signal?.throwIfAborted();
+  const created: Array<{ created?: Created }> = files.map(() => ({}));
   for (const [i, file] of files.entries()) {
     try {
-      await writeOne(file, created[i] as { created: boolean });
+      if (i > 0) signal?.throwIfAborted();
+      await writeOne(file, created[i] as { created?: Created });
     } catch (err) {
       const unrestored: string[] = [];
       const changedMeanwhile: string[] = [];
       for (const [j, f] of files.slice(0, i + 1).entries()) {
-        const ok = await restore(f, j === i, created[j]?.created === true).catch(() => {
+        const ok = await restore(f, j === i, created[j]?.created).catch(() => {
           unrestored.push(f.path);
           return true;
         });

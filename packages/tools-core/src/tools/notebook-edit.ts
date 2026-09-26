@@ -130,7 +130,7 @@ export const notebookEditTool: ToolDefinition<z.infer<typeof Input>, z.infer<typ
     ctx.checkpoint?.(prior); // the pre-image, for `amb rewind`
     // Jupyter writes one-space indentation and a trailing newline.
     const content = `${JSON.stringify({ ...nb, cells }, null, 1)}\n`;
-    await writeAllOrRestore([{ abs, path: input.path, before: prior, after: content }]);
+    await writeAllOrRestore([{ abs, path: input.path, before: prior, after: content }], ctx.signal);
     return {
       path: input.path,
       operation: "modify",

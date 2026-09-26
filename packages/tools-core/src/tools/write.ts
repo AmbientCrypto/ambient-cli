@@ -50,7 +50,7 @@ export const writeTool: ToolDefinition<z.infer<typeof Input>, z.infer<typeof Out
     // Rewriting a CRLF file keeps it CRLF (the model writes `\n`) instead of flipping every line ending.
     const content = prior !== undefined ? matchLineEndings(input.content, prior) : input.content;
     await mkdir(dirname(abs), { recursive: true });
-    await writeAllOrRestore([{ abs, path: input.path, before: prior, after: content }]);
+    await writeAllOrRestore([{ abs, path: input.path, before: prior, after: content }], ctx.signal);
     const operation = prior === undefined ? "create" : "modify";
     return {
       path: input.path,

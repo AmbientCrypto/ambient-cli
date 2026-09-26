@@ -35,7 +35,7 @@ type Input = z.infer<typeof Input>;
 type Output = z.infer<typeof Output>;
 
 /** The subset of the fetch Response we use — so tests can stub without a real network / DOM types. */
-interface FetchResponse {
+export interface FetchResponse {
   status: number;
   headers: { get(name: string): string | null };
   body?: {
@@ -53,14 +53,14 @@ type FetchImpl = (url: string, init: Record<string, unknown>) => Promise<FetchRe
 interface PinnedDispatcher {
   close?(): Promise<void>;
 }
-type MakeDispatcher = (addrs: { address: string }[]) => PinnedDispatcher | undefined;
+export type MakeDispatcher = (addrs: { address: string }[]) => PinnedDispatcher | undefined;
 
 /**
  * Build an undici dispatcher whose DNS lookup ALWAYS returns the exact addresses the guard already vetted, so
  * the real connection can't be re-resolved to a different (internal) IP between the check and the fetch — the
  * DNS-rebinding SSRF window. TLS still uses the hostname (SNI + cert validation), only the IP is pinned.
  */
-const defaultMakeDispatcher: MakeDispatcher = (addrs) => {
+export const defaultMakeDispatcher: MakeDispatcher = (addrs) => {
   if (addrs.length === 0) return undefined;
   const pinned = addrs.map((a) => ({
     address: a.address,
@@ -81,7 +81,7 @@ const defaultMakeDispatcher: MakeDispatcher = (addrs) => {
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /** Read a response body, stopping at maxBytes. Prefers streaming (stops early); falls back to arrayBuffer. */
-async function readCapped(
+export async function readCapped(
   res: FetchResponse,
   maxBytes: number,
 ): Promise<{ bytes: Uint8Array; truncated: boolean }> {

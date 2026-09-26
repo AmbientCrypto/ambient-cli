@@ -10,7 +10,7 @@ import {
   bashTool,
   createBuiltinRegistry,
   editTool,
-  globToRegExp,
+  globMatcher,
   globTool,
   grepTool,
   listTool,
@@ -112,11 +112,11 @@ describe("read / list / glob / grep", () => {
   });
 });
 
-describe("globToRegExp", () => {
+describe("globMatcher", () => {
   it("handles ** and *", () => {
-    expect(globToRegExp("**/*.ts").test("a/b/c.ts")).toBe(true);
-    expect(globToRegExp("src/*.ts").test("src/a.ts")).toBe(true);
-    expect(globToRegExp("src/*.ts").test("src/a/b.ts")).toBe(false);
+    expect(globMatcher("**/*.ts").test("a/b/c.ts")).toBe(true);
+    expect(globMatcher("src/*.ts").test("src/a.ts")).toBe(true);
+    expect(globMatcher("src/*.ts").test("src/a/b.ts")).toBe(false);
   });
 });
 

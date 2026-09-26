@@ -142,3 +142,22 @@ describe.skipIf(process.platform === "win32")("an edit through a symlink", () =>
     expect(linkedTargetRisk("write", { path: "dangling.txt" }, ws).join()).toMatch(/hooks/);
   });
 });
+
+describe.skipIf(process.platform === "win32")("the program a read-only command runs", () => {
+  it("asks when PATH would run a copy the workspace ships", () => {
+    const saved = process.env.PATH;
+    mkdirSync(join(ws, "bin"));
+    writeFileSync(join(ws, "bin", "ls"), "#!/bin/sh\necho gotcha\n", { mode: 0o755 });
+    try {
+      expect(holds("ls")).toBe(true); // the system's ls
+      process.env.PATH = `${join(ws, "bin")}:${saved}`;
+      expect(holds("ls")).toBe(false);
+      process.env.PATH = `bin:${saved}`; // a relative PATH folder resolves inside the workspace
+      expect(holds("ls")).toBe(false);
+      process.env.PATH = saved;
+      expect(holds(`${join(ws, "bin", "ls")}`)).toBe(false);
+    } finally {
+      process.env.PATH = saved;
+    }
+  });
+});

@@ -1,6 +1,11 @@
 import { realpathSync } from "node:fs";
 import { posix, win32 } from "node:path";
-import type { PermissionDecision, PermissionInput } from "@amb/protocol";
+import {
+  type GlobMatcher,
+  type PermissionDecision,
+  type PermissionInput,
+  compileGlob,
+} from "@amb/protocol";
 import { hasUnmodeledExpansion } from "./read-only-command.js";
 import { MAX_CMD_CHARS, baseName, parseShellCommands } from "./shell-tokens.js";
 
@@ -99,21 +104,9 @@ const FILE_TOOLS = new Set([
 const isResourceTool = (name: string) =>
   name === "mcp_read_resource" || name === "mcp_list_resources";
 
-/** A glob (`*` within a path segment, `**` across segments, `?` one character) as a RegExp. */
-function globToRegExp(glob: string, caseInsensitive: boolean): RegExp {
-  let re = "";
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i] as string;
-    if (c === "*") {
-      if (glob[i + 1] === "*") {
-        const slashAfter = glob[i + 2] === "/";
-        re += slashAfter ? "(?:.*/)?" : ".*";
-        i += slashAfter ? 2 : 1;
-      } else re += "[^/]*";
-    } else if (c === "?") re += "[^/]";
-    else re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  }
-  return new RegExp(`^${re}$`, caseInsensitive ? "i" : "");
+/** A glob (`*` within a path segment, `**` across segments, `?` one character), matched in linear time. */
+function globRule(glob: string, caseInsensitive: boolean): GlobMatcher {
+  return compileGlob(glob, { doubleStarSlash: "optional-dirs", caseInsensitive });
 }
 
 const toSlash = (p: string) => p.replace(/\\/g, "/");
@@ -161,7 +154,7 @@ function pathMatches(pattern: string, path: string, root: string, home: string):
     anchorPattern(pattern, root, home),
     anchorPattern(pattern, realPath(root), realPath(home)),
   ];
-  const res = [...new Set(variants)].map((v) => globToRegExp(v, insensitive));
+  const res = [...new Set(variants)].map((v) => globRule(v, insensitive));
   for (const candidate of new Set([path, realPath(path)])) {
     const norm = toSlash(
       /^[A-Za-z]:/.test(candidate) ? win32.normalize(candidate) : posix.normalize(candidate),
@@ -203,14 +196,14 @@ export function readDeniedMatcher(
   const realHome = realPath(home);
   const res = patterns.flatMap((p) =>
     [...new Set([anchorPattern(p, workspaceRoot, home), anchorPattern(p, realRoot, realHome)])].map(
-      (v) => globToRegExp(v, insensitive),
+      (v) => globRule(v, insensitive),
     ),
   );
   return (path) => matchesAny(res, path);
 }
 
 /** Whether a path, or a folder it's inside, matches — as written and as the filesystem resolves it. */
-function matchesAny(res: readonly RegExp[], path: string): boolean {
+function matchesAny(res: readonly GlobMatcher[], path: string): boolean {
   for (const candidate of new Set([path, realPath(path)])) {
     const norm = toSlash(
       /^[A-Za-z]:/.test(candidate) ? win32.normalize(candidate) : posix.normalize(candidate),
