@@ -128,3 +128,16 @@ describe("where servers come from", () => {
     expect(spec?.args).toEqual(["--root", root]);
   });
 });
+
+describe("a wrapped .mcp.json with a switched-off entry", () => {
+  it("still loads the other servers", () => {
+    mkdirSync(ws, { recursive: true });
+    writeFileSync(
+      join(ws, ".mcp.json"),
+      JSON.stringify({ mcpServers: { good: { command: "x" }, off: { enabled: false } } }),
+    );
+    const names = loadMcpConfig(ws, {}, home).map((s) => s.name);
+    expect(names).toContain("good");
+    expect(names).not.toContain("mcpServers");
+  });
+});

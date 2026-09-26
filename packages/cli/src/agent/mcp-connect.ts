@@ -2,6 +2,7 @@ import { type McpServerSpec, loadMcpConfig } from "@amb/context";
 import { McpHttpError, type McpPromptEntry, startMcpServers } from "@amb/mcp";
 import type { ToolDefinition } from "@amb/protocol";
 import { tokenSafeUrl } from "../mcp-auth/oauth.js";
+import { visible } from "./workspace-settings.js";
 
 /** Where a configured server stands after connecting. */
 export interface McpServerStatus {
@@ -156,7 +157,8 @@ export async function connectMcp(
   const session = await start(configs, {
     onLog: (m) => {
       // A server that wants a sign-in gets its own, actionable notice (below) instead of the raw failure.
-      if (!/needs you to sign in/.test(m)) notices.push(m);
+      // Server-supplied text (its error messages) can't drive the terminal: controls are shown, not run.
+      if (!/needs you to sign in/.test(m)) notices.push(visible(m));
     },
   });
   const specByName = new Map(usable.map((s) => [s.name, s]));
@@ -173,7 +175,7 @@ export async function connectMcp(
         ...baseStatus(spec),
         state: "failed",
         tools: 0,
-        ...(out.error ? { detail: out.error.message } : {}),
+        ...(out.error ? { detail: visible(out.error.message) } : {}),
       });
     }
   }

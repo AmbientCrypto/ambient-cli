@@ -1,4 +1,4 @@
-import { closeSync, fsyncSync, mkdirSync, openSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 import { type Event, EventSchema, type NewEvent, newEventId } from "@amb/protocol";
 import { eventChecksum } from "./checksum.js";
@@ -39,7 +39,19 @@ export class SessionWriter {
 
   private ensureDir(): void {
     if (!this.opened) {
-      mkdirSync(dirname(this.path), { recursive: true });
+      // Session logs hold what you typed and what tools read: private to you, like your shell history.
+      const dir = dirname(this.path);
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      for (const [p, mode] of [
+        [dir, 0o700],
+        [this.path, 0o600],
+      ] as const) {
+        try {
+          chmodSync(p, mode); // folders and logs made by earlier versions too
+        } catch {
+          // not there yet (the log), or a filesystem without modes
+        }
+      }
       this.opened = true;
     }
   }
@@ -60,7 +72,7 @@ export class SessionWriter {
     // Validate before writing — a malformed event must never enter the durable log.
     EventSchema.parse(full);
 
-    const fd = openSync(this.path, "a");
+    const fd = openSync(this.path, "a", 0o600);
     try {
       // Write ALL bytes — writeSync can perform a short write; loop until the whole record lands.
       const buf = Buffer.from(`${JSON.stringify(full)}\n`, "utf8");

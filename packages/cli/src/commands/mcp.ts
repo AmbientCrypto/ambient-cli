@@ -1,5 +1,5 @@
-import { loadMcpConfig } from "@amb/context";
-import { workspaceSettings } from "../agent/workspace-settings.js";
+import { type McpServerSpec, loadMcpConfig } from "@amb/context";
+import { visible, workspaceSettings } from "../agent/workspace-settings.js";
 import { configDir, loadConfig } from "../config.js";
 import { realFetch } from "../mcp-auth/auth-port.js";
 import { signIn } from "../mcp-auth/oauth.js";
@@ -12,6 +12,22 @@ const SOURCE_LABEL = { user: "yours", project: "this project", plugin: "a plugin
  * `ambient mcp` lists the configured MCP servers; `ambient mcp login <name>` signs in to a server that uses
  * OAuth (opens the browser); `ambient mcp logout <name>` forgets that sign-in.
  */
+/**
+ * A server's command or URL as its config writes it — `${VAR}` references unexpanded, so listing servers
+ * never prints the value of an environment variable (a project's config could name any, keys included).
+ */
+function asWritten(s: McpServerSpec): string {
+  const raw = (s.raw ?? {}) as { command?: unknown; args?: unknown; url?: unknown };
+  const args = Array.isArray(raw.args) ? raw.args.filter((a) => typeof a === "string") : [];
+  const text =
+    typeof raw.command === "string"
+      ? [raw.command, ...args].join(" ")
+      : typeof raw.url === "string"
+        ? raw.url
+        : "";
+  return visible(text);
+}
+
 export async function runMcp(args: string[]): Promise<void> {
   const config = loadConfig();
   const cwd = process.cwd();
@@ -30,7 +46,7 @@ export async function runMcp(args: string[]): Promise<void> {
     }
     const trusted = workspaceSettings(cwd, config, configDir()).projectTrusted();
     for (const s of specs) {
-      const where = s.command ? [s.command, ...(s.args ?? [])].join(" ") : (s.url ?? "");
+      const where = asWritten(s);
       const notes = [
         SOURCE_LABEL[s.source],
         s.transport,

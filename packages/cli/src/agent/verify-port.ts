@@ -130,9 +130,18 @@ export function verifyScripts(workspaceRoot: string): Array<{ file: string; cont
     const path = join(workspaceRoot, file);
     if (!existsLink(path)) continue;
     const content = isRegularFile(path) ? readTextCappedSafe(path, { root: workspaceRoot }) : null;
-    out.push({ file, content: content ?? "(not a readable regular file — it won't run)" });
+    out.push({ file, content: content ?? UNREADABLE });
   }
   return out;
+}
+
+/** What trust records for a verify script it can't read in full (too large, not a regular file). Such a
+ *  script never runs: trust covers exactly what was shown, and this placeholder shows nothing of it. */
+const UNREADABLE = "(not a readable regular file, or too large to show — it won't run)";
+
+/** Whether every verify script present can be shown (and so trusted) in full. */
+function allReadable(workspaceRoot: string): boolean {
+  return verifyScripts(workspaceRoot).every((s) => s.content !== UNREADABLE);
 }
 
 const VERIFY_EXTS = ["", ".ps1", ".cmd", ".bat"];
@@ -168,7 +177,10 @@ export function makeVerifyPort(
   // Only a real file runs — never a link or a device a repository put in its place.
   const scripts = VERIFY_EXTS.map((e) => join(workspaceRoot, `${VERIFY_SCRIPT}${e}`));
   if (scripts.some((p) => existsLink(p) && !isRegularFile(p))) return undefined;
-  return async (signal) => (trusted() ? runVerifyScript(runner, workspaceRoot, signal) : null);
+  if (!allReadable(workspaceRoot)) return undefined;
+  // Checked again before each run: the script may have changed into one that can't be shown.
+  return async (signal) =>
+    trusted() && allReadable(workspaceRoot) ? runVerifyScript(runner, workspaceRoot, signal) : null;
 }
 
 function runVerifyScript(

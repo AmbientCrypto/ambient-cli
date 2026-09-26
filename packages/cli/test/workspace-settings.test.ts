@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -235,6 +235,28 @@ describe("a project's verify script waits for trust", () => {
       expect(existsSync(marker)).toBe(false);
     },
   );
+
+  it.skipIf(process.platform === "win32")(
+    "one too large to show never runs, even after trusting what was shown",
+    async () => {
+      const { chmodSync, existsSync } = await import("node:fs");
+      const { makeVerifyPort } = await import("../src/agent/verify-port.js");
+      mkdirSync(join(ws, ".ambient"), { recursive: true });
+      const marker = join(dir, "ran");
+      const script = join(ws, ".ambient", "verify");
+      const huge = (cmd: string) => `#!/bin/sh\n${cmd}\n# ${"x".repeat(2 * 1024 * 1024)}\n`;
+      writeFileSync(script, huge("echo reviewed"));
+      chmodSync(script, 0o755);
+      const s = makeWorkspaceSettings({ workspaceRoot: ws, home, trustFile, config: {} });
+      expect(s.trustSummary().join("\n")).toContain("too large to show");
+      s.trust();
+      expect(makeVerifyPort(ws, () => s.projectTrusted())).toBeUndefined();
+      // Swapped for other oversized content: the placeholder (and so the trust) is the same — still no run.
+      writeFileSync(script, huge(`touch '${marker}'`));
+      expect(makeVerifyPort(ws, () => s.projectTrusted())).toBeUndefined();
+      expect(existsSync(marker)).toBe(false);
+    },
+  );
 });
 
 describe("a verify script that isn't a plain file", () => {
@@ -304,10 +326,24 @@ describe("saving trust while another ambient holds the lock", () => {
     const s = makeWorkspaceSettings({ workspaceRoot: ws, home, trustFile, config: {} });
     expect(s.trust()).toContain("Couldn't save the trust setting: another ambient is saving it");
     expect(s.projectTrusted()).toBe(false);
-    const old = new Date(Date.now() - 60_000);
+    const old = new Date(Date.now() - 120_000);
     utimesSync(join(dir, "cfg", "trusted-projects.json.lock"), old, old); // its process is long gone
     expect(s.trust()).toContain("Trusted this folder's 1 allow rule");
     expect(s.projectTrusted()).toBe(true);
+  }, 10_000);
+
+  it("takes over a lock whose owner is gone, but never one whose owner still runs", () => {
+    writeSettings(ws, "settings.json", { permissions: { allow: ["Bash(make:*)"] } });
+    const lock = join(dir, "cfg", "trusted-projects.json.lock");
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(join(lock, "owner"), "999999 gone"); // no such process
+    const s = makeWorkspaceSettings({ workspaceRoot: ws, home, trustFile, config: {} });
+    expect(s.trust()).toContain("Trusted this folder's 1 allow rule");
+    s.untrust();
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(join(lock, "owner"), `${process.pid} someone-else`); // alive
+    expect(s.trust()).toContain("another ambient is saving it");
+    expect(readFileSync(join(lock, "owner"), "utf8")).toBe(`${process.pid} someone-else`);
   }, 10_000);
 
   it("shows a plugin id that isn't name@marketplace whole", () => {

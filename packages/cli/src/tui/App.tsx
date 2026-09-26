@@ -180,6 +180,8 @@ export interface AppDeps {
   skillsInfo?: { total: number; pinned: number };
   /** Full skill rows for the interactive `/skills` browser (loaded at the CLI edge). */
   skills?: SkillRow[];
+  /** The skill rows again for a trust change (a trusted folder's plugin choices decide plugin skills). */
+  loadSkills?: (projectPlugins: boolean) => SkillRow[];
   /** Account effects for the in-app key flow (/login, /logout, a rejected or revoked key). */
   account?: AccountPort;
   /** Fetch the fleet as it is right now (keeps the model list live while the TUI is open). */
@@ -425,6 +427,15 @@ export function App(deps: AppDeps): ReactNode {
   const [folderTrusted, setFolderTrusted] = useState(
     () => deps.settings?.projectTrusted() === true,
   );
+  const initialTrust = useRef(folderTrusted);
+  // The startup rows, until /trust changes which plugin skills apply.
+  const skills = useMemo(
+    () =>
+      deps.loadSkills && folderTrusted !== initialTrust.current
+        ? deps.loadSkills(folderTrusted)
+        : deps.skills,
+    [deps.loadSkills, deps.skills, folderTrusted],
+  );
   // Discover the user's existing Claude/Codex slash commands ONCE — their names join the palette, their
   // bodies (with $ARGUMENTS/$1 expansion) run as a task on dispatch.
   const customCommands = useMemo(() => {
@@ -446,7 +457,7 @@ export function App(deps: AppDeps): ReactNode {
     }
     // Skills run as `/skill-name [args]` too (unless a skill opts out, or a command already has the name).
     const taken = new Set([...SLASH_COMMANDS.map((c) => c.name), ...bodies.keys()]);
-    for (const sk of deps.skills ?? []) {
+    for (const sk of skills ?? []) {
       const name = `/${sk.name}`;
       if (sk.userInvocable === false || taken.has(name) || !/^[a-zA-Z0-9_.:-]+$/.test(sk.name))
         continue;
@@ -463,7 +474,7 @@ export function App(deps: AppDeps): ReactNode {
       });
     }
     return { palette, bodies };
-  }, [deps.workspaceRoot, deps.skills, folderTrusted]);
+  }, [deps.workspaceRoot, skills, folderTrusted]);
   // MCP prompts join the menu as `/mcp__server__prompt` once their servers connect (in the background).
   const commandPalette = [...customCommands.palette, ...(deps.mcp?.promptCommands() ?? [])];
   const [picker, setPickerState] = useState<"model" | "effort" | "skills" | null>(null);
@@ -489,10 +500,10 @@ export function App(deps: AppDeps): ReactNode {
     setSkillFilterState(f);
   };
   const [pinnedSet, setPinnedSet] = useState<Set<string>>(
-    () => new Set((deps.skills ?? []).filter((s) => s.pinned).map((s) => s.name)),
+    () => new Set((skills ?? []).filter((s) => s.pinned).map((s) => s.name)),
   );
   const filteredSkills = useMemo(() => {
-    const all = (deps.skills ?? []).map((s) => ({ ...s, pinned: pinnedSet.has(s.name) }));
+    const all = (skills ?? []).map((s) => ({ ...s, pinned: pinnedSet.has(s.name) }));
     const f = skillFilter.trim().toLowerCase();
     const matched =
       f.length === 0
@@ -506,7 +517,7 @@ export function App(deps: AppDeps): ReactNode {
         a.source.localeCompare(b.source) ||
         a.name.localeCompare(b.name),
     );
-  }, [deps.skills, skillFilter, pinnedSet]);
+  }, [skills, skillFilter, pinnedSet]);
   const filteredSkillsRef = useRef<SkillRow[]>([]);
   filteredSkillsRef.current = filteredSkills;
 
@@ -820,13 +831,23 @@ export function App(deps: AppDeps): ReactNode {
       // Record the current north-star into THIS session's log if it changed since we last did, so `amb resume`
       // restores it. Written before the run so it precedes turn.started in the durable order.
       if (goalRef.current !== (persistedGoalRef.current ?? "")) {
-        writer.append({
-          kind: "goal.set",
-          schemaVersion: 1,
-          sessionId,
-          text: goalRef.current,
-        } as NewEvent);
-        persistedGoalRef.current = goalRef.current;
+        try {
+          writer.append({
+            kind: "goal.set",
+            schemaVersion: 1,
+            sessionId,
+            text: goalRef.current,
+          } as NewEvent);
+          persistedGoalRef.current = goalRef.current;
+        } catch (err) {
+          // A full disk or unwritable sessions folder: say so and carry on — the run itself reports the
+          // log failure through its normal error path, and this run still ends cleanly.
+          dispatch({
+            t: "notice",
+            level: "warn",
+            text: `couldn't record the goal in the session log: ${(err as Error).message}`,
+          });
+        }
       }
       // Conversational continuity. Once this session has run at least once we carry the REAL message array
       // forward (lossless, runtime-compacted) — the strong path. Only the FIRST run of a session (or a
@@ -1439,7 +1460,15 @@ export function App(deps: AppDeps): ReactNode {
         if (settings && (choice === "yes" || choice === "no"))
           setFolderTrusted(settings.projectTrusted());
         // The folder's MCP servers are already connected — reconnect without them, now.
-        if (wasTrusted) void deps.mcp?.refresh();
+        if (wasTrusted) {
+          deps.mcp?.refresh().catch((e: unknown) =>
+            dispatch({
+              t: "notice",
+              level: "warn",
+              text: `MCP servers couldn't reconnect: ${(e as Error).message} — /mcp shows them`,
+            }),
+          );
+        }
         break;
       }
       case "/memory": {
@@ -1561,7 +1590,7 @@ export function App(deps: AppDeps): ReactNode {
       }
       case "/skills": {
         // Open the interactive browser when we have the skill rows; else a summary notice.
-        if (deps.skills && deps.skills.length > 0) {
+        if (skills && skills.length > 0) {
           setSkillFilter("");
           setPickerSel(0);
           setPicker("skills");
@@ -2459,7 +2488,7 @@ export function App(deps: AppDeps): ReactNode {
                   rows={filteredSkills}
                   selected={Math.min(pickerSel, Math.max(0, filteredSkills.length - 1))}
                   filter={skillFilter}
-                  total={deps.skills?.length ?? 0}
+                  total={skills?.length ?? 0}
                   width={width}
                   maxRows={Math.max(3, rows - 11)}
                 />

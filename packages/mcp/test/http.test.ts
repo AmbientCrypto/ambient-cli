@@ -52,3 +52,21 @@ describe("spawnHttpTransport", () => {
     expect(got).toEqual([]); // a closed transport sends nothing
   });
 });
+
+describe("closing an HTTP transport", () => {
+  it("cancels requests still waiting on the server", async () => {
+    const signals: AbortSignal[] = [];
+    const hanging: HttpFetch = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        const signal = (init as { signal: AbortSignal }).signal;
+        signals.push(signal);
+        signal.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    const { transport } = spawnHttpTransport({ url: "https://x/mcp" }, hanging);
+    transport.send('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
+    await tick();
+    expect(signals[0]?.aborted).toBe(false);
+    transport.close();
+    expect(signals[0]?.aborted).toBe(true);
+  });
+});

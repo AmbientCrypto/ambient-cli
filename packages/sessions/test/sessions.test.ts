@@ -306,3 +306,25 @@ describe("transcriptText", () => {
     expect(transcriptText(events)).toBe("> build X\ndone");
   });
 });
+
+describe.skipIf(process.platform === "win32")("session logs are private", () => {
+  it("are readable only by you, folders included — also ones an earlier version left open", async () => {
+    const { statSync, writeFileSync, mkdirSync, chmodSync } = await import("node:fs");
+    const { dirname } = await import("node:path");
+    const sid = newSessionId();
+    const file = sessionPath(sid, env);
+    mkdirSync(dirname(file), { recursive: true, mode: 0o755 });
+    chmodSync(dirname(file), 0o755);
+    writeFileSync(file, "", { mode: 0o644 });
+    chmodSync(file, 0o644);
+    new SessionWriter(sid, now, env).append({
+      schemaVersion: 1,
+      sessionId: sid,
+      kind: "session.started",
+      cwd: "/ws",
+      workspaceRoot: "/ws",
+    });
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(statSync(dirname(file)).mode & 0o777).toBe(0o700);
+  });
+});

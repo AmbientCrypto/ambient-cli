@@ -148,17 +148,22 @@ export async function runTui(opts: TuiOptions): Promise<void> {
   const update = updateInfo?.updateAvailable
     ? { latest: updateInfo.latest, command: updateCommand() }
     : undefined;
+  const settings = workspaceSettings(cwd, opts.settingsConfig ?? {}, configDir());
   // Skills for the `/skills` summary + interactive browser — a fast fs scan at the edge (the App never
   // touches the filesystem). `onTogglePin` writes the pin list and returns the new pinned state.
   const pinnedNames = new Set(readPinnedSkills(cwd));
-  const skillRows = discoverSkills(cwd).map((s) => ({
-    name: s.name,
-    source: skillSource(s.path),
-    description: s.description,
-    pinned: pinnedNames.has(s.name),
-    ...(s.userInvocable === false ? { userInvocable: false } : {}),
-    ...(s.argumentHint ? { argumentHint: s.argumentHint } : {}),
-  }));
+  // A trusted folder's own plugin choices decide which plugin skills are listed (the App asks again when
+  // /trust changes that).
+  const skillRowsFor = (projectPlugins: boolean) =>
+    discoverSkills(cwd, undefined, { projectSettings: projectPlugins }).map((s) => ({
+      name: s.name,
+      source: skillSource(s.path),
+      description: s.description,
+      pinned: pinnedNames.has(s.name),
+      ...(s.userInvocable === false ? { userInvocable: false } : {}),
+      ...(s.argumentHint ? { argumentHint: s.argumentHint } : {}),
+    }));
+  const skillRows = skillRowsFor(settings.projectTrusted());
   const skillsInfo = { total: skillRows.length, pinned: pinnedNames.size };
   const onTogglePin = (name: string): boolean => {
     if (pinnedNames.has(name)) {
@@ -175,7 +180,6 @@ export async function runTui(opts: TuiOptions): Promise<void> {
   // blocking ~30s while a big MCP suite (10+ servers) spawns. Tools attach to the next run once ready; the
   // holder is read live via getMcpTools. `--no-mcp` / AMBIENT_NO_MCP skips MCP entirely for the leanest start.
   const skipMcp = opts.noMcp || process.env.AMBIENT_NO_MCP === "1";
-  const settings = workspaceSettings(cwd, opts.settingsConfig ?? {}, configDir());
   const mcp = makeMcpControl({
     workspaceRoot: cwd,
     connect: {
@@ -251,6 +255,7 @@ export async function runTui(opts: TuiOptions): Promise<void> {
       ...(skipMcp ? {} : { mcp }),
       skillsInfo,
       skills: skillRows,
+      loadSkills: skillRowsFor,
       onTogglePin,
       account,
       listFiles: () => listWorkspaceFiles(cwd),

@@ -29,6 +29,8 @@ export function mcpToolToDefinition(
   server: string,
   tool: McpTool,
   client: McpClient,
+  /** The server is reached over the network (HTTP/SSE), so every call sends its arguments out. */
+  remote = false,
 ): ToolDefinition | null {
   if (!SAFE_NAME.test(server) || !SAFE_NAME.test(tool.name)) return null;
   // NOTE: a server name MAY contain `__` (e.g. `prod__db`). In the rare case two servers/tools alias to the
@@ -39,7 +41,14 @@ export function mcpToolToDefinition(
   // online service can still carry what you pass it out of the machine, so it asks like web_fetch.
   const readOnly = tool.annotations?.readOnlyHint === true;
   const closedWorld = tool.annotations?.openWorldHint === false;
-  const effects: Effect[] = readOnly ? (closedWorld ? ["read"] : ["read", "network"]) : ["process"];
+  // A remote server is reached over the network whatever its tools say about themselves.
+  const effects: Effect[] = readOnly
+    ? closedWorld && !remote
+      ? ["read"]
+      : ["read", "network"]
+    : remote
+      ? ["process", "network"]
+      : ["process"];
   const Input = jsonSchemaToZod(tool.inputSchema);
 
   return {
@@ -74,7 +83,11 @@ const ReadResourceInput = z.object({
  * Tools for the resources MCP servers expose (files, records, docs a server can hand over): one to list
  * them, one to read one. Reading is side-effect free, so both are read-only; the content is untrusted data.
  */
-export function mcpResourceTools(clients: Map<string, McpClient>): ToolDefinition[] {
+export function mcpResourceTools(
+  clients: Map<string, McpClient>,
+  /** Servers reached over the network — reading their resources is a network request. */
+  remote: ReadonlySet<string> = new Set(),
+): ToolDefinition[] {
   const names = [...clients.keys()].join(", ");
   const client = (server: string) => {
     const c = clients.get(server);
@@ -86,7 +99,9 @@ export function mcpResourceTools(clients: Map<string, McpClient>): ToolDefinitio
   };
   const common = {
     version: "1",
-    effects: ["read"] as Effect[],
+    effects: ([...clients.keys()].some((n) => remote.has(n))
+      ? ["read", "network"]
+      : ["read"]) as Effect[],
     idempotency: "idempotent" as const,
     parallelSafe: true,
     resumability: "inspect" as const,

@@ -32,6 +32,20 @@ function capabilitiesPath(): string {
 }
 
 /** Live-test one model's native tool-calling. Returns true iff it emitted a well-formed call. */
+/** Whether a probe reply is a real call to the tool as declared: an object carrying a whole-number `sum`. */
+export function probeCallValid(argumentsText: string): boolean {
+  try {
+    const args = JSON.parse(argumentsText) as unknown;
+    if (!args || typeof args !== "object" || Array.isArray(args)) return false;
+    const sum = (args as { sum?: unknown }).sum;
+    return typeof sum === "number"
+      ? Number.isInteger(sum)
+      : typeof sum === "string" && /^-?\d+$/.test(sum.trim());
+  } catch {
+    return false;
+  }
+}
+
 async function probeModel(config: AmbientConfig, modelId: string): Promise<boolean> {
   const out = await streamChatCompletion(
     config,
@@ -51,12 +65,7 @@ async function probeModel(config: AmbientConfig, modelId: string): Promise<boole
   );
   const call = out.toolCalls.find((c) => c.name === "report_sum");
   if (!call) return false;
-  try {
-    JSON.parse(call.arguments);
-    return true;
-  } catch {
-    return false;
-  }
+  return probeCallValid(call.arguments);
 }
 
 /** `ambient probe <model-id>` or `ambient probe --all` — live-test native tool-calling; record + display. */

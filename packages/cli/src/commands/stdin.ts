@@ -34,7 +34,19 @@ export function readPipedStdin(
       resolve({ text: Buffer.concat(chunks).toString("utf8"), truncated });
     };
     stdin.on("data", (c: Buffer | string) => {
-      if (total >= MAX_STDIN_BYTES) return; // already full; ignore any late chunk
+      if (total >= MAX_STDIN_BYTES) {
+        // Filled exactly to the cap and more is coming: that's truncation — stop here instead of waiting
+        // for an end a continuous producer never sends.
+        truncated = true;
+        stdin.pause();
+        try {
+          stdin.destroy();
+        } catch {
+          /* best-effort */
+        }
+        finish();
+        return;
+      }
       const b = Buffer.isBuffer(c) ? c : Buffer.from(c);
       const room = MAX_STDIN_BYTES - total;
       if (b.length > room) {

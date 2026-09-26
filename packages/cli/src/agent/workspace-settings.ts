@@ -132,34 +132,64 @@ export function projectFingerprint(
 }
 
 const LOCK_WAIT_MS = 3_000;
-const LOCK_STALE_MS = 10_000;
+/** A save takes milliseconds; a lock this old belongs to a process that stopped (or was suspended). */
+const LOCK_STALE_MS = 60_000;
 const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-/** Run `fn` holding `<file>.lock` (a folder, created atomically), so two ambient processes saving the trust
- *  file don't undo each other's change. A lock left by a crashed process is cleared once it's stale. */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM"; // alive, just not ours to signal
+  }
+}
+
+/** Whether a lock can be taken over: its owner is gone, or it's far older than any save takes. */
+function lockIsStale(lock: string): boolean {
+  let age = 0;
+  try {
+    age = Date.now() - statSync(lock).mtimeMs;
+  } catch {
+    return false; // gone already — the next attempt takes it
+  }
+  if (age > LOCK_STALE_MS) return true;
+  try {
+    const pid = Number(readFileSync(join(lock, "owner"), "utf8").split(" ")[0]);
+    return Number.isInteger(pid) && pid > 0 && !processAlive(pid);
+  } catch {
+    return false; // its owner is still writing who it is
+  }
+}
+
+/** Run `fn` holding `<file>.lock` (a folder, created atomically, naming its owner), so two ambient
+ *  processes saving the trust file don't undo each other's change. A lock whose owner is gone is taken
+ *  over; a lock is only ever removed by its own owner. */
 function withLock<T>(file: string, fn: () => T): T {
   const lock = `${file}.lock`;
+  const me = `${process.pid} ${randomUUID()}`;
   const deadline = Date.now() + LOCK_WAIT_MS;
   for (;;) {
     try {
       mkdirSync(lock);
+      writeFileSync(join(lock, "owner"), me, { flag: "wx" });
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      try {
-        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS)
-          rmSync(lock, { recursive: true, force: true });
-      } catch {
-        // gone already — try again
-      }
-      if (Date.now() > deadline) throw new Error("another ambient is saving it — try again");
-      pause(25);
+      if (lockIsStale(lock)) rmSync(lock, { recursive: true, force: true });
+      else if (Date.now() > deadline) throw new Error("another ambient is saving it — try again");
+      else pause(25);
     }
   }
   try {
     return fn();
   } finally {
-    rmSync(lock, { recursive: true, force: true });
+    try {
+      if (readFileSync(join(lock, "owner"), "utf8") === me)
+        rmSync(lock, { recursive: true, force: true });
+    } catch {
+      // already taken over as stale — it isn't ours to remove
+    }
   }
 }
 

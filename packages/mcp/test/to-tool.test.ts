@@ -5,6 +5,7 @@ import {
   McpClient,
   type Transport,
   jsonSchemaToZod,
+  mcpResourceTools,
   mcpToolToDefinition,
 } from "../src/index.js";
 
@@ -111,6 +112,22 @@ describe("mcpToolToDefinition", () => {
     expect(closed?.manifest.effects).toEqual(["read"]);
     const rw = mcpToolToDefinition("x", { name: "mutate" }, client());
     expect(rw?.manifest.effects).toEqual(["process"]);
+  });
+
+  it("a remote server's tools always count as network, whatever they say about themselves", () => {
+    const closed = { name: "local", annotations: { readOnlyHint: true, openWorldHint: false } };
+    expect(mcpToolToDefinition("x", closed, client(), true)?.manifest.effects).toEqual([
+      "read",
+      "network",
+    ]);
+    expect(mcpToolToDefinition("x", { name: "mutate" }, client(), true)?.manifest.effects).toEqual([
+      "process",
+      "network",
+    ]);
+    const [list] = mcpResourceTools(new Map([["web", client()]]), new Set(["web"]));
+    expect(list?.manifest.effects).toEqual(["read", "network"]);
+    const [localList] = mcpResourceTools(new Map([["disk", client()]]));
+    expect(localList?.manifest.effects).toEqual(["read"]);
   });
 
   it("rejects unsafe server/tool names (skipped, not fatal)", () => {

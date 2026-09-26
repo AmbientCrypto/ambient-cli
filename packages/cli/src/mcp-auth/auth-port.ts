@@ -2,7 +2,37 @@ import type { McpAuthPort } from "../agent/mcp-connect.js";
 import { type OAuthFetch, accessToken } from "./oauth.js";
 import { type TokenStore, makeTokenStore } from "./token-store.js";
 
-export const realFetch: OAuthFetch = (url, init) => fetch(url, init);
+/** A sign-in server that stops answering, or answers without end, must not hold up ambient. */
+const OAUTH_TIMEOUT_MS = 30_000;
+const MAX_OAUTH_BODY_BYTES = 1_000_000;
+
+async function textCapped(res: Response, maxBytes: number): Promise<string> {
+  const reader = res.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new Error("the sign-in server's answer was too large");
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+export const realFetch: OAuthFetch = async (url, init) => {
+  const res = await fetch(url, { ...init, signal: AbortSignal.timeout(OAUTH_TIMEOUT_MS) });
+  return {
+    ok: res.ok,
+    status: res.status,
+    headers: res.headers,
+    text: () => textCapped(res, MAX_OAUTH_BODY_BYTES),
+  };
+};
 
 /** Stored MCP sign-ins as the connect step uses them: the current token, and a refreshed one on a 401. */
 export function makeMcpAuth(

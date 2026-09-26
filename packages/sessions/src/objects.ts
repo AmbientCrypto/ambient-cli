@@ -42,7 +42,7 @@ export function saveObject(
   const file = blobFile(dir, key);
   // An intact copy is already there (dedup). A torn one — a crash mid-write — is replaced.
   if (readObject(sessionId, key, env) !== undefined) return key;
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   // Write aside, then rename into place, so a crash never leaves a half-written blob under its key.
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   try {

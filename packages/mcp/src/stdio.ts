@@ -59,6 +59,9 @@ export function spawnStdioTransport(cfg: StdioServerConfig): {
     stderrTail = (stderrTail + d).slice(-4000);
   });
   child.stderr?.on("error", () => {}); // never let an EPIPE on the diagnostic stream crash us
+  // A server that closes its input while still running makes our next write fail (EPIPE): that ends the
+  // connection instead of crashing ambient.
+  child.stdin?.on("error", (e) => fireClose(e));
   void stderrTail; // captured for future diagnostics; the read itself is what prevents the deadlock
   const fireClose = (err?: Error) => {
     if (closed) return;

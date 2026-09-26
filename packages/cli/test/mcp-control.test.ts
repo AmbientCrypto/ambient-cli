@@ -173,3 +173,42 @@ describe("refresh", () => {
     control.close();
   });
 });
+
+describe("refresh after trust is taken back", () => {
+  it("drops the old servers at once, and they stay off if reconnecting fails", async () => {
+    let calls = 0;
+    let release: (() => void) | undefined;
+    const tool = { manifest: { name: "mcp__proj__t" } };
+    const connectImpl = async () => {
+      calls++;
+      if (calls === 1)
+        return {
+          tools: [tool],
+          currentTools: () => [tool],
+          prompts: [],
+          getPrompt: async () => "",
+          notices: [],
+          close: () => {},
+          servers: [],
+        } as unknown as McpConnection;
+      await new Promise<void>((r) => {
+        release = r;
+      });
+      throw new Error("offline");
+    };
+    const control = makeMcpControl({
+      workspaceRoot: ws,
+      connect: { approveServer: async () => false },
+      store: makeTokenStore({ platform: "linux", configDir: ws }),
+      connectImpl: connectImpl as never,
+    });
+    await control.start();
+    expect(control.tools()).toHaveLength(1);
+    const pending = control.refresh();
+    expect(control.tools()).toEqual([]); // gone before the reconnect finishes
+    release?.();
+    await expect(pending).rejects.toThrow("offline");
+    expect(control.tools()).toEqual([]);
+    control.close();
+  });
+});

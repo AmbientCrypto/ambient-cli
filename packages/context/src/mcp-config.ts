@@ -150,7 +150,10 @@ function looksLikeServerEntry(v: unknown): boolean {
 function isWrapperMap(v: unknown): boolean {
   if (!v || typeof v !== "object") return false;
   const values = Object.values(v as Record<string, unknown>);
-  return values.length > 0 && values.every(looksLikeServerEntry);
+  // Every value an object (a server entry — possibly a disabled one without a command), at least one a
+  // runnable server. A bare server's own fields include strings (`command`, `url`), so it never qualifies.
+  const isObject = (x: unknown) => !!x && typeof x === "object" && !Array.isArray(x);
+  return values.length > 0 && values.every(isObject) && values.some(looksLikeServerEntry);
 }
 
 /** `~/.claude.json` also holds Claude Code's per-project history, so it grows well past a config file's size. */
@@ -316,7 +319,7 @@ export function mcpServersFromFlag(
   for (const [name, raw] of Object.entries(servers)) {
     if (!/^[a-zA-Z0-9_.-]+$/.test(name)) continue;
     const spec = toSpec(name, raw, "user", env);
-    if (spec) out.push(spec);
+    if (spec) out.push({ ...spec, raw });
   }
   return out;
 }

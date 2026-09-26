@@ -86,3 +86,23 @@ describe("connectMcp", () => {
     ).toBe(true);
   });
 });
+
+describe("a failing server's error text", () => {
+  it("can't drive the terminal: control characters are shown, not sent", async () => {
+    const start = ((specs: { name: string }[], opts: { onLog?: (m: string) => void }) => {
+      opts.onLog?.(`mcp: ${specs[0]?.name} unavailable — skipped (\u001b[2J\u001b[Hfake prompt)`);
+      return Promise.resolve({
+        tools: [],
+        close: () => {},
+        servers: [{ name: "bad", ok: false, tools: 0, error: new Error("\u001b[31mred") }],
+      });
+    }) as unknown as NonNullable<ConnectOptions["start"]>;
+    const specs: McpServerSpec[] = [
+      { name: "bad", transport: "stdio", command: "x", source: "user" },
+    ];
+    const c = await connectMcp("/ws", { load: () => specs, start });
+    const text = JSON.stringify([c.notices, c.servers]);
+    expect(text).not.toContain("\\u001b");
+    expect(c.notices.join("")).toContain("fake prompt");
+  });
+});

@@ -23,7 +23,8 @@ export interface McpControl {
   promptCommands(): McpPromptCommand[];
   /** A prompt's text with its arguments filled in from what the user typed after the command. */
   expandPrompt(command: string, args: string): Promise<string>;
-  /** Reconnect every server from the current config and trust (servers no longer allowed are dropped). */
+  /** Disconnect every server now, then reconnect from the current config and trust (servers no longer
+   *  allowed stay off). Rejects when reconnecting fails — the servers are then off until it succeeds. */
   refresh(): Promise<void>;
   close(): void;
 }
@@ -72,7 +73,14 @@ export function makeMcpControl(opts: {
 
   return {
     start: () => reconnect().catch(() => {}),
-    refresh: () => reconnect().catch(() => {}),
+    // Drop the current servers at once (nothing revoked stays usable while the new connection starts,
+    // or if it fails), then connect again from the current config and trust. Rejects if that fails.
+    refresh: async () => {
+      generation++; // a connect still in flight must not put the old servers back
+      current?.close();
+      current = undefined;
+      await reconnect();
+    },
     status: () => current?.servers,
     tools: () => current?.currentTools() ?? [],
     promptCommands: () =>

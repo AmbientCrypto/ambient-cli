@@ -30,6 +30,22 @@ describe("readPipedStdin", () => {
     expect(Buffer.byteLength(res.text)).toBe(MAX_STDIN_BYTES);
   });
 
+  it("a producer that fills the cap exactly and keeps going doesn't leave the read waiting", async () => {
+    // Chunks that add up to exactly the cap, then an endless stream (no end event ever).
+    const chunk = Buffer.alloc(64 * 1024, 0x61);
+    let sent = 0;
+    const endless = new Readable({
+      read() {
+        sent++;
+        this.push(chunk);
+      },
+    }) as Readable & { isTTY?: boolean };
+    const res = await readPipedStdin(endless);
+    expect(res.truncated).toBe(true);
+    expect(Buffer.byteLength(res.text)).toBe(MAX_STDIN_BYTES);
+    expect(sent).toBeGreaterThan(MAX_STDIN_BYTES / chunk.length);
+  });
+
   it("resolves to empty on an empty pipe", async () => {
     const res = await readPipedStdin(pipe(""));
     expect(res).toEqual({ text: "", truncated: false });

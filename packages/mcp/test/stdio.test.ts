@@ -55,3 +55,24 @@ it("a server doesn't inherit ambient's own API key unless its config passes it",
     else process.env.AMBIENT_API_KEY = before;
   }
 });
+
+it.skipIf(process.platform === "win32")(
+  "a server that closes its input ends the connection instead of crashing ambient",
+  async () => {
+    const { transport } = spawnStdioTransport({
+      command: process.execPath,
+      args: ["-e", 'require("node:fs").closeSync(0); setInterval(() => {}, 1000)'],
+    });
+    let closedWith: Error | undefined;
+    transport.onClose((e) => {
+      closedWith = e;
+    });
+    await settle(300);
+    for (let i = 0; i < 20 && !closedWith; i++) {
+      transport.send(`${JSON.stringify({ jsonrpc: "2.0", id: i, method: "ping" })}\n`);
+      await settle(50);
+    }
+    expect(closedWith?.message ?? "").toMatch(/EPIPE|write|closed|destroyed/i);
+    transport.close();
+  },
+);

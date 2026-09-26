@@ -107,10 +107,13 @@ export function spawnHttpTransport(
     }
   };
 
+  // Requests still in flight, so closing the transport cancels them (nothing keeps ambient waiting).
+  const inFlight = new Set<AbortController>();
   const transport: Transport = {
     send: (line) => {
       if (closed) return;
       const ac = new AbortController();
+      inFlight.add(ac);
       const timer = setTimeout(() => ac.abort(), REQUEST_TIMEOUT_MS);
       const post = () =>
         doFetch(cfg.url, {
@@ -159,7 +162,10 @@ export function spawnHttpTransport(
         .catch((e) => {
           if (!closed) onClose(e as Error);
         })
-        .finally(() => clearTimeout(timer));
+        .finally(() => {
+          clearTimeout(timer);
+          inFlight.delete(ac);
+        });
     },
     onMessage: (cb) => {
       onMsg = cb;
@@ -168,7 +174,9 @@ export function spawnHttpTransport(
       onClose = cb;
     },
     close: () => {
-      closed = true; // HTTP is per-request; nothing persistent to tear down (session expires server-side)
+      closed = true; // the session itself expires server-side
+      for (const ac of inFlight) ac.abort();
+      inFlight.clear();
     },
   };
   return { transport };

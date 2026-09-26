@@ -103,9 +103,10 @@ export async function startMcpServers(
   // Each server's tools, in config order; rebuilt for a server when it announces a changed list.
   const byServer = new Map<string, ToolDefinition[]>();
   const order: string[] = [];
+  const remote = new Set(specs.filter((s) => "url" in s.config).map((s) => s.name));
   const build = (server: string, client: McpClient, discovered: McpTool[]) =>
     discovered
-      .map((t) => mcpToolToDefinition(server, t, client))
+      .map((t) => mcpToolToDefinition(server, t, client, remote.has(server)))
       .filter((d): d is ToolDefinition => d !== null);
 
   for (const s of started) {
@@ -156,6 +157,7 @@ export async function startMcpServers(
       out.push(
         ...mcpResourceTools(
           new Map(withResources.map((n) => [n, clients.get(n) as McpClient])),
+          remote,
         ).filter((d) => !seen.has(d.manifest.name)),
       );
     }
