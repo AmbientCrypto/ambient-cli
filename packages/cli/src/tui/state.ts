@@ -154,6 +154,14 @@ export interface WaveAction {
 /** Cap on the live action lines — ≥ the default subagent concurrency (4), so it can never exceed what runs. */
 const MAX_WAVE_ACTIONS = 4;
 
+/** The activity line while a wave runs: one steady summary ("Delegating · 3 builders"). */
+function waveActivity(wave: { total: number; roleWord: string }): Activity {
+  return {
+    verb: "Delegating",
+    detail: `${wave.total} ${wave.total === 1 ? wave.roleWord.replace(/s$/, "") : wave.roleWord}`,
+  };
+}
+
 /** Pluralize a child role for the wave header/record ("scout" → "scouts"; mixed/unknown → "agents"). */
 function pluralizeRole(role: string | undefined): string {
   return role ? `${role}s` : "agents";
@@ -1039,7 +1047,10 @@ export function reduce(state: ViewState, ev: NewEvent, now = 0): ViewState {
     case "subagent.started": {
       const status: Status = {
         ...state.status,
-        activity: { verb: "Delegating", detail: ev.label },
+        activity:
+          state.wave && state.wave.id === ev.toolCallId
+            ? waveActivity(state.wave)
+            : { verb: "Delegating", detail: ev.label },
       };
       if (state.wave && state.wave.id === ev.toolCallId) {
         // Record the label; grow `total` only when it wasn't already fixed by a `subagent.wave` event.
@@ -1079,24 +1090,25 @@ export function reduce(state: ViewState, ev: NewEvent, now = 0): ViewState {
       if (!state.wave || state.wave.id !== ev.toolCallId) return state; // unknown parent → no-op
       const label = state.wave.labels[ev.childSessionId] ?? "";
       const verb = toolActivity(ev.toolName, {}).verb;
-      // running → the current action ("Reading src/App.tsx"); settled → neutral "working" between tools.
+      const prior = state.wave.actions.find((a) => a.childSessionId === ev.childSessionId);
+      // A child's row shows its latest action ("Reading src/App.tsx") and keeps it between tools — flipping
+      // back to "working" each time a tool ends made every row flicker.
       const text =
-        ev.status === "running" ? `${verb}${ev.preview ? ` ${ev.preview}` : ""}` : "working";
+        ev.status === "running"
+          ? `${verb}${ev.preview ? ` ${ev.preview}` : ""}`
+          : (prior?.text ?? "working");
+      if (prior?.text === text) return state; // nothing new to draw
       // Upsert this child's action into the bounded ring (most-recent kept, capped so height is stable).
       const others = state.wave.actions.filter((a) => a.childSessionId !== ev.childSessionId);
       const actions = [...others, { childSessionId: ev.childSessionId, label, text }].slice(
         -MAX_WAVE_ACTIONS,
       );
-      const detail = ev.status === "running" ? ev.preview : "working";
+      // The line above the panel stays one steady summary — following whichever child spoke last made it
+      // (and its clock) jump between children. The panel shows each child's own action.
       return {
         ...state,
         wave: { ...state.wave, actions },
-        status: {
-          ...state.status,
-          activity: label
-            ? { verb: `↳ ${label}`, ...(detail ? { detail } : {}) }
-            : (state.status.activity ?? { verb: "Delegating" }),
-        },
+        status: { ...state.status, activity: waveActivity(state.wave) },
       };
     }
 

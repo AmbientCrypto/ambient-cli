@@ -988,7 +988,7 @@ describe("tui reducer — subagent visibility", () => {
       prompt: "find the auth flow",
     } as NewEvent);
 
-  it("subagent.tool surfaces the child's action in the always-on activity line (not a frozen 'Delegating')", () => {
+  it("a child's action shows in its panel row; the line above stays one steady summary (no flicker)", () => {
     let s = startGroup(init());
     s = reduce(s, {
       kind: "subagent.tool",
@@ -1003,11 +1003,13 @@ describe("tui reducer — subagent visibility", () => {
       status: "running",
       preview: "/auth/",
     } as NewEvent);
-    expect(s.status.activity?.verb).toContain("find-auth"); // WHICH subagent
-    expect(s.status.activity?.detail).toContain("/auth/"); // …and WHAT it's doing
+    const row = s.wave?.actions.find((x) => x.childSessionId === "ses_c");
+    expect(row?.label).toBe("find-auth"); // WHICH subagent
+    expect(row?.text).toContain("/auth/"); // …and WHAT it's doing
+    expect(s.status.activity?.verb).toBe("Delegating"); // the line above doesn't jump between children
   });
 
-  it("on a child tool SETTLE the activity line shows a neutral 'working', not the stale completed action", () => {
+  it("a child's row keeps its latest action when a tool ends (no flip back to 'working')", () => {
     const tool = (status: "running" | "ok", preview: string) =>
       ({
         kind: "subagent.tool",
@@ -1024,10 +1026,12 @@ describe("tui reducer — subagent visibility", () => {
       }) as NewEvent;
     let s = startGroup(init());
     s = reduce(s, tool("running", "/auth/"));
-    expect(s.status.activity?.detail).toContain("/auth/"); // running → shows the action
+    const activity = s.status.activity;
+    const row = () => s.wave?.actions.find((x) => x.childSessionId === "ses_c")?.text;
+    expect(row()).toContain("/auth/");
     s = reduce(s, tool("ok", "12 hits"));
-    expect(s.status.activity?.verb).toContain("find-auth");
-    expect(s.status.activity?.detail).toBe("working"); // settled → neutral, NOT "searching 12 hits"
+    expect(row()).toContain("/auth/"); // unchanged: nothing flickers when the tool ends
+    expect(s.status.activity).toEqual(activity);
   });
 
   it("subagent.delta is a no-op for the view (per-token prose no longer drives a tall re-rendering panel)", () => {
