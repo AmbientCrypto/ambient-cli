@@ -117,6 +117,7 @@ export class ChatAccumulator {
   private content = "";
   private reasoning = "";
   private finishReason: string | undefined;
+  private sawDone = false;
   private reportedModel: string | undefined;
   private usage: AccumulatedCompletion["usage"];
   /** Tool calls in first-seen order. Keyed by stream index when the provider sends one, else by call id —
@@ -137,7 +138,10 @@ export class ChatAccumulator {
    */
   push(e: SSEEvent): boolean {
     const chunk = parseChatChunk(e.data);
-    if (chunk === CHUNK_DONE) return false;
+    if (chunk === CHUNK_DONE) {
+      this.sawDone = true;
+      return false;
+    }
     if (this.reportedModel === undefined && typeof chunk.model === "string") {
       this.reportedModel = chunk.model;
     }
@@ -206,6 +210,12 @@ export class ChatAccumulator {
     return this.lastToolKey ?? "i0";
   }
 
+  /** Whether the stream said it was finished (a finish reason or `[DONE]`) — a connection that just stops
+   *  partway through never does. */
+  ended(): boolean {
+    return this.sawDone || this.finishReason !== undefined;
+  }
+
   result(): AccumulatedCompletion {
     const toolCalls = [...this.toolMap.values()];
     return {
@@ -243,30 +253,34 @@ export async function* readSSEStream(
   const decoder = new TextDecoder();
   const sep = /\r?\n\r?\n/;
   let buf = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    onBytes?.();
-    buf += decoder.decode(value, { stream: true });
-    let m = sep.exec(buf);
-    while (m) {
-      const block = buf.slice(0, m.index);
-      buf = buf.slice(m.index + m[0].length);
-      for (const ev of parseSSE(block)) yield ev;
-      m = sep.exec(buf);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      onBytes?.();
+      buf += decoder.decode(value, { stream: true });
+      let m = sep.exec(buf);
+      while (m) {
+        const block = buf.slice(0, m.index);
+        buf = buf.slice(m.index + m[0].length);
+        for (const ev of parseSSE(block)) yield ev;
+        m = sep.exec(buf);
+      }
+      // A real event is a few KB; megabytes with no event boundary is a broken stream, not a slow one.
+      if (buf.length > MAX_PENDING_EVENT_CHARS) {
+        throw new AmbError({
+          kind: "transport",
+          message: `the stream sent ${buf.length} characters without an event boundary`,
+          retryable: true,
+        });
+      }
     }
-    // A real event is a few KB; megabytes with no event boundary is a broken stream, not a slow one.
-    if (buf.length > MAX_PENDING_EVENT_CHARS) {
-      await reader.cancel().catch(() => {});
-      throw new AmbError({
-        kind: "transport",
-        message: `the stream sent ${buf.length} characters without an event boundary`,
-        retryable: true,
-      });
+    buf += decoder.decode();
+    if (buf.trim().length > 0) {
+      for (const ev of parseSSE(buf)) yield ev;
     }
-  }
-  buf += decoder.decode();
-  if (buf.trim().length > 0) {
-    for (const ev of parseSSE(buf)) yield ev;
+  } finally {
+    // Stopped early (at `[DONE]`, by the caller, or on an error): let go of the connection.
+    await reader.cancel().catch(() => {});
   }
 }

@@ -154,5 +154,14 @@ export async function streamChatCompletion(
   for await (const e of streamChat(config, req, opts)) {
     if (!acc.push(e)) break;
   }
+  // A connection that stops partway (no finish reason, no [DONE]) left an incomplete answer — perhaps a
+  // tool call with the rest of the batch missing. Retry it rather than act on it.
+  if (!acc.ended()) {
+    throw new AmbError({
+      kind: "transport",
+      message: "the response stream ended before the model finished",
+      retryable: true,
+    });
+  }
   return acc.result();
 }

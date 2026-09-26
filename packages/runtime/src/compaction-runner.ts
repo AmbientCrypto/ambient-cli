@@ -161,7 +161,11 @@ export function summaryOutputTokens(
   readerWindow: number = window,
 ): number {
   const cap = Math.min(model?.maxOutputLength ?? UNKNOWN_OUTPUT, SAFE_MAX_OUTPUT_TOKENS);
-  return Math.max(1024, Math.min(cap, Math.floor(window * 0.15), Math.floor(readerWindow * 0.15)));
+  // At least 1024 when the windows allow — but never more than the model will produce.
+  return Math.min(
+    cap,
+    Math.max(1024, Math.min(Math.floor(window * 0.15), Math.floor(readerWindow * 0.15))),
+  );
 }
 
 /**

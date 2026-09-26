@@ -8,6 +8,16 @@ import type { ChatClient, ChatParams, RunOptions } from "../src/ports.js";
 import { TEXT_200K, catalogOf } from "./fixtures/catalog.js";
 
 describe("BackgroundTasks", () => {
+  it("keeps nothing of a task once its report is handed over", async () => {
+    const tasks = new BackgroundTasks();
+    for (let round = 0; round < 10; round++) {
+      for (let i = 0; i < 3; i++) tasks.start(`t${i}`, async () => "x".repeat(10_000));
+      await tasks.settled(new AbortController().signal);
+      expect(tasks.takeFinished()).toHaveLength(3);
+      expect((tasks as unknown as { tasks: Map<string, unknown> }).tasks.size).toBe(0);
+    }
+  });
+
   it("hands each finished report over once, and settles when all are done", async () => {
     const tasks = new BackgroundTasks();
     let finish: (v: string) => void = () => {};

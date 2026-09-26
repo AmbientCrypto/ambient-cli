@@ -917,6 +917,36 @@ describe("Agent loop", () => {
     expect(learned).toEqual([["moonshotai/kimi-k2.7-code", 200_000]]);
   });
 
+  it("learns the ceiling of the model that actually overflowed (a failed-over one)", async () => {
+    const learned: Array<[string, number]> = [];
+    const capabilities = {
+      laneFor: () => "direct" as const,
+      learn: () => {},
+      learnCeiling: (id: string, max: number) => learned.push([id, max]),
+    };
+    let thrown = false;
+    const client: ChatClient = {
+      async fetchCatalog() {
+        return catalog;
+      },
+      async chat() {
+        if (!thrown) {
+          thrown = true;
+          throw new AmbError({
+            kind: "overflow",
+            message: "Prompt exceeds the model's context window.",
+            retryable: false,
+            model: "z-ai/glm-5.2",
+            detail: "prompt is too long: 40000 tokens > 32000 maximum",
+          });
+        }
+        return { content: "done", toolCalls: [] };
+      },
+    };
+    await new Agent(client).run("hi", baseOpts({ capabilities }));
+    expect(learned).toEqual([["z-ai/glm-5.2", 32_000]]);
+  });
+
   it("a DIRECT request fails honestly rather than failing over to an assisted-only model", async () => {
     // Both warm, but the only substitute (glm) is classified assisted-only. A direct request already put
     // native tools on the wire, so failing over to glm would silently ignore them → we must fail honestly.

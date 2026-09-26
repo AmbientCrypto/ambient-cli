@@ -1011,7 +1011,16 @@ export class Agent {
             // so parsing message alone never learned the ceiling (the whole ceiling machine got no input).
             const overflowBody = typeof err.detail === "string" ? err.detail : err.message;
             const observedMax = parseOverflowMax(overflowBody);
-            if (observedMax !== undefined) opts.capabilities?.learnCeiling?.(target, observedMax);
+            // The overflow may come from a model failed over to, with a smaller window than the one this
+            // turn was budgeted for: learn its ceiling, and compact to fit it.
+            const overflowed = err.model ?? target;
+            if (observedMax !== undefined)
+              opts.capabilities?.learnCeiling?.(overflowed, observedMax);
+            const fitWindow = Math.min(
+              budget.contextWindow,
+              liveCatalog.find((m) => m.id === overflowed)?.contextLength ?? budget.contextWindow,
+              observedMax ?? budget.contextWindow,
+            );
             const reduced = await reduceContext(
               this.client,
               messages,
@@ -1022,7 +1031,7 @@ export class Agent {
               emit,
               opts.signal,
               persistMemory,
-              budget.contextWindow,
+              fitWindow,
               projectMemory,
               compactions,
               artifactPort,

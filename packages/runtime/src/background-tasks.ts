@@ -52,10 +52,11 @@ export class BackgroundTasks implements BackgroundTasksPort {
   /** Finished tasks not yet handed to the agent (each is handed over once). */
   takeFinished(): Array<{ id: string; label: string; report: string }> {
     const out: Array<{ id: string; label: string; report: string }> = [];
-    for (const t of this.tasks.values()) {
+    for (const t of [...this.tasks.values()]) {
       if (t.report === undefined || t.reported) continue;
       t.reported = true;
       out.push({ id: t.id, label: t.label, report: t.report });
+      this.tasks.delete(t.id); // handed over: nothing left to keep for the rest of the session
     }
     return out;
   }

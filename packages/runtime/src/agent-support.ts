@@ -183,19 +183,31 @@ export function flattenNativeToolTurns(messages: Msg[]): Msg[] {
       for (const tc of m.toolCalls) nameById.set(tc.id, tc.name);
     }
   }
-  return messages.map((m): Msg => {
+  const out: Msg[] = [];
+  let lastWasResult = false;
+  for (const m of messages) {
     if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
       const text = typeof m.content === "string" ? m.content : "";
       const calls = m.toolCalls.map((tc) => `[called ${tc.name} ${tc.rawArgs}]`).join("\n");
-      return { role: "assistant", content: [text, calls].filter(Boolean).join("\n") };
-    }
-    if (m.role === "tool") {
+      out.push({ role: "assistant", content: [text, calls].filter(Boolean).join("\n") });
+      lastWasResult = false;
+    } else if (m.role === "tool") {
       const name = (m.toolCallId && nameById.get(m.toolCallId)) || "tool";
       const body = typeof m.content === "string" ? m.content : "";
-      return { role: "user", content: `Result of ${name}:\n${body}` };
+      const result = `Result of ${name}:\n${body}`;
+      const prev = out.at(-1);
+      // One batch's results go back as ONE user message: several user messages in a row break some chat
+      // templates (the same rule the assisted lane follows for its own results).
+      if (lastWasResult && prev && typeof prev.content === "string") {
+        out[out.length - 1] = { role: "user", content: `${prev.content}\n\n${result}` };
+      } else out.push({ role: "user", content: result });
+      lastWasResult = true;
+    } else {
+      out.push(m);
+      lastWasResult = false;
     }
-    return m;
-  });
+  }
+  return out;
 }
 
 /**

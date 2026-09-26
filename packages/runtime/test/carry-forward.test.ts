@@ -271,3 +271,24 @@ describe("cross-lane carry-forward safety (review Finding 1)", () => {
     expect(sent.some((m) => String(m.content).includes("FILE_CONTENTS_XYZ"))).toBe(true);
   });
 });
+
+describe("native tool history sent to an assisted model", () => {
+  it("puts one batch's results in one user message", async () => {
+    const { flattenNativeToolTurns } = await import("../src/agent-support.js");
+    const out = flattenNativeToolTurns([
+      { role: "user", content: "look" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          { id: "a", name: "read", args: {}, rawArgs: '{"path":"x"}' },
+          { id: "b", name: "grep", args: {}, rawArgs: '{"pattern":"y"}' },
+        ],
+      },
+      { role: "tool", toolCallId: "a", content: "X" },
+      { role: "tool", toolCallId: "b", content: "Y" },
+    ] as never);
+    expect(out.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+    expect(out[2]?.content).toBe("Result of read:\nX\n\nResult of grep:\nY");
+  });
+});

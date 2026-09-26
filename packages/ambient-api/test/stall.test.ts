@@ -110,3 +110,41 @@ describe("a clock firing while an error body is read", () => {
     await expect(p).rejects.toMatchObject({ kind: "rate_limit", retryAfterMs: 5000 });
   });
 });
+
+describe("a stream that stops partway", () => {
+  it("is retried, never taken as a finished answer", async () => {
+    const call = {
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              { index: 0, id: "c1", function: { name: "write", arguments: '{"path":"a"}' } },
+            ],
+          },
+        },
+      ],
+    };
+    const p = streamChatCompletion(config, req, { fetch: scriptedFetch([[0, chunk(call)]]) });
+    await expect(p).rejects.toMatchObject({ kind: "transport", retryable: true });
+    await expect(p).rejects.toThrow(/ended before the model finished/);
+  });
+
+  it("finishes normally with [DONE], and lets go of a connection the server keeps open", async () => {
+    let cancelled = false;
+    const f: FetchLike = async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(ctrl) {
+          ctrl.enqueue(chunk({ choices: [{ delta: { content: "hi" } }] }));
+          ctrl.enqueue(enc.encode("data: [DONE]\n\n")); // then the server never closes
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      return new Response(body, { status: 200 });
+    };
+    const out = await streamChatCompletion(config, req, { fetch: f });
+    expect(out.content).toBe("hi");
+    expect(cancelled).toBe(true);
+  });
+});
