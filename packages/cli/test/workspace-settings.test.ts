@@ -295,3 +295,24 @@ describe("saying no to a project's settings", () => {
     expect(JSON.parse(readFileSync(trustFile, "utf8"))).toEqual({ "/other": "abc" });
   });
 });
+
+describe("saving trust while another ambient holds the lock", () => {
+  it("waits, then says so instead of overwriting; a stale lock is cleared", async () => {
+    const { utimesSync } = await import("node:fs");
+    writeSettings(ws, "settings.json", { permissions: { allow: ["Bash(make:*)"] } });
+    mkdirSync(join(dir, "cfg", "trusted-projects.json.lock"), { recursive: true });
+    const s = makeWorkspaceSettings({ workspaceRoot: ws, home, trustFile, config: {} });
+    expect(s.trust()).toContain("Couldn't save the trust setting: another ambient is saving it");
+    expect(s.projectTrusted()).toBe(false);
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(join(dir, "cfg", "trusted-projects.json.lock"), old, old); // its process is long gone
+    expect(s.trust()).toContain("Trusted this folder's 1 allow rule");
+    expect(s.projectTrusted()).toBe(true);
+  }, 10_000);
+
+  it("shows a plugin id that isn't name@marketplace whole", () => {
+    writeSettings(ws, "settings.json", { enabledPlugins: { "foo@": true, plain: true } });
+    const s = makeWorkspaceSettings({ workspaceRoot: ws, home, trustFile, config: {} });
+    expect(s.trustSummary().join("\n")).toContain("   foo@, plain");
+  });
+});

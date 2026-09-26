@@ -137,3 +137,39 @@ describe("MCP prompts as slash commands", () => {
     await expect(ctl.expandPrompt("/mcp__gh__other", "")).rejects.toThrow("isn't available");
   });
 });
+
+describe("refresh", () => {
+  it("reconnects from the current trust and closes the old connection", async () => {
+    let trusted = true;
+    let closed = 0;
+    const connectImpl = async (_ws: string, opts: { approveServer?: () => Promise<boolean> }) => {
+      const allowed = (await opts.approveServer?.()) === true;
+      return {
+        tools: [],
+        currentTools: () => [],
+        prompts: [],
+        getPrompt: async () => "",
+        notices: [],
+        close: () => {
+          closed++;
+        },
+        servers: allowed
+          ? [{ name: "local", source: "project", transport: "stdio", state: "connected", tools: 2 }]
+          : [],
+      } as McpConnection;
+    };
+    const control = makeMcpControl({
+      workspaceRoot: ws,
+      connect: { approveServer: async () => trusted },
+      store: makeTokenStore({ platform: "linux", configDir: ws }),
+      connectImpl: connectImpl as never,
+    });
+    await control.start();
+    expect(control.status()?.map((s) => s.name)).toEqual(["local"]);
+    trusted = false;
+    await control.refresh();
+    expect(control.status()).toEqual([]);
+    expect(closed).toBe(1);
+    control.close();
+  });
+});

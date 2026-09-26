@@ -40,7 +40,8 @@ export async function readHead(abs: string, n: number): Promise<Buffer> {
 /**
  * Lines `start` to `start + count` (0-based) of a text file, read as a stream so the file is never held
  * whole: reading stops at the end of the window. Lines split the way `split(/\r?\n/)` would, and a line
- * longer than `lineCap` characters is cut. `more` says whether the file goes on past the window.
+ * longer than `lineCap` characters is cut (`cut` says one was). `more` says whether the file goes on past
+ * the window.
  */
 export async function readLineWindow(
   abs: string,
@@ -48,28 +49,34 @@ export async function readLineWindow(
   count: number,
   lineCap: number,
   signal?: AbortSignal,
-): Promise<{ lines: string[]; more: boolean }> {
+): Promise<{ lines: string[]; more: boolean; cut: boolean }> {
   const end = start + count;
   const lines: string[] = [];
   let index = 0; // the line being read
   let current = "";
+  let dropped = false; // characters past the cap (plus room for a CRLF's \r) were left out of `current`
   let cut = false;
   const append = (piece: string) => {
-    if (index < start || index >= end || cut) return;
-    const room = lineCap - current.length;
+    if (index < start || index >= end || dropped) return;
+    const room = lineCap + 1 - current.length;
     if (piece.length > room) {
       current += piece.slice(0, room);
-      cut = true;
+      dropped = true;
     } else current += piece;
   };
-  const finishLine = () => {
+  const finishLine = (atNewline: boolean) => {
     if (index >= start && index < end) {
-      const line = current.endsWith("\r") ? current.slice(0, -1) : current;
-      lines.push(cut ? `${line} … (line cut at ${lineCap} characters)` : line);
+      // Only a \r right before a newline is a line ending; one at the very end of the file is text.
+      let line = atNewline && !dropped && current.endsWith("\r") ? current.slice(0, -1) : current;
+      if (dropped || line.length > lineCap) {
+        line = `${line.slice(0, lineCap)} … (line cut at ${lineCap} characters)`;
+        cut = true;
+      }
+      lines.push(line);
     }
     index++;
     current = "";
-    cut = false;
+    dropped = false;
   };
   const stream = createReadStream(abs, signal ? { signal } : {});
   const decoder = new StringDecoder("utf8");
@@ -79,15 +86,16 @@ export async function readLineWindow(
       let pos = 0;
       for (let nl = text.indexOf("\n"); nl >= 0; nl = text.indexOf("\n", pos)) {
         append(text.slice(pos, nl));
-        finishLine();
+        finishLine(true);
         pos = nl + 1;
-        if (index > end) return { lines, more: true }; // a line past the window exists
+        // Past a newline there is always another line (empty at the end of the file), so the window is done.
+        if (index >= end) return { lines, more: true, cut };
       }
       append(text.slice(pos));
     }
     append(decoder.end());
-    finishLine(); // the text after the last newline is a line too (empty when the file ends with one)
-    return { lines, more: index > end };
+    finishLine(false); // the text after the last newline is a line too (empty when the file ends with one)
+    return { lines, more: index > end, cut };
   } finally {
     stream.destroy();
   }
@@ -101,14 +109,41 @@ export interface PlannedWrite {
   after: string;
 }
 
-/** Put a file back the way it was: remove one that didn't exist, rewrite one whose content changed. */
-async function restore(f: PlannedWrite): Promise<void> {
-  if (f.before === undefined) {
-    await rm(f.abs, { force: true });
+/** Write one file. A new file is created exclusively, so one that appeared meanwhile is never overwritten;
+ *  `created` says whether this call made it (only then may a rollback remove it). */
+async function writeOne(f: PlannedWrite, state: { created: boolean }): Promise<void> {
+  if (f.before !== undefined) {
+    await writeFile(f.abs, f.after, "utf8");
     return;
   }
+  const fh = await open(f.abs, "wx");
+  state.created = true;
+  try {
+    await fh.writeFile(f.after, "utf8");
+  } finally {
+    await fh.close();
+  }
+}
+
+/**
+ * Put one file back. A file this call wrote goes back only while it still holds what was written — a change
+ * made meanwhile by something else is left alone (returns false). The file whose write failed may be cut
+ * short, so it goes back unless it already matches.
+ */
+export async function restore(
+  f: PlannedWrite,
+  failed: boolean,
+  created: boolean,
+): Promise<boolean> {
+  if (f.before === undefined) {
+    if (created) await rm(f.abs, { force: true });
+    return true;
+  }
   const now = await readFile(f.abs, "utf8").catch(() => undefined);
-  if (now !== f.before) await writeFile(f.abs, f.before, "utf8");
+  if (now === f.before) return true;
+  if (!failed && now !== f.after) return false;
+  await writeFile(f.abs, f.before, "utf8");
+  return true;
 }
 
 /**
@@ -117,19 +152,37 @@ async function restore(f: PlannedWrite): Promise<void> {
  * the error is reported, so a change across several files lands whole or not at all.
  */
 export async function writeAllOrRestore(files: readonly PlannedWrite[]): Promise<void> {
+  const created = files.map(() => ({ created: false }));
   for (const [i, file] of files.entries()) {
     try {
-      await writeFile(file.abs, file.after, "utf8");
+      await writeOne(file, created[i] as { created: boolean });
     } catch (err) {
-      const stuck: string[] = [];
-      for (const f of files.slice(0, i + 1)) {
-        await restore(f).catch(() => stuck.push(f.path));
+      const unrestored: string[] = [];
+      const changedMeanwhile: string[] = [];
+      for (const [j, f] of files.slice(0, i + 1).entries()) {
+        const ok = await restore(f, j === i, created[j]?.created === true).catch(() => {
+          unrestored.push(f.path);
+          return true;
+        });
+        if (!ok) changedMeanwhile.push(f.path);
       }
-      const reason = (err as Error).message;
+      const code = (err as NodeJS.ErrnoException).code;
+      const reason =
+        code === "EEXIST"
+          ? "something is already there — created meanwhile, or a link"
+          : (err as Error).message;
+      const notes = [
+        ...(unrestored.length > 0
+          ? [`couldn't put back ${unrestored.join(", ")} — it may be left partly written`]
+          : []),
+        ...(changedMeanwhile.length > 0
+          ? [`left ${changedMeanwhile.join(", ")} as it is — something else changed it meanwhile`]
+          : []),
+      ];
       throw new Error(
-        stuck.length === 0
+        notes.length === 0
           ? `couldn't write ${file.path} (${reason}) — nothing was changed`
-          : `couldn't write ${file.path} (${reason}), and couldn't put back ${stuck.join(", ")} — 'ambient rewind' has their earlier versions`,
+          : `couldn't write ${file.path} (${reason}); ${notes.join("; ")}`,
       );
     }
   }

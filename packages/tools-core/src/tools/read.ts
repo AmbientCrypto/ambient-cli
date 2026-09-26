@@ -77,14 +77,14 @@ export const readTool: ToolDefinition<z.infer<typeof Input>, z.infer<typeof Outp
     } else if (looksBinary(head)) {
       throw new Error(`${input.path} is a binary file (${size} bytes), not text`);
     } else if (!whole) {
-      const { lines, more } = await readLineWindow(
+      const { lines, more, cut } = await readLineWindow(
         abs,
         start,
         count,
         MAX_STREAMED_LINE_CHARS,
         ctx.signal,
       );
-      const truncated = more || lines.length > MAX_LINES;
+      const truncated = more || cut || lines.length > MAX_LINES;
       return { path: input.path, lines: lines.length, content: numbered(lines), truncated };
     } else {
       raw = whole.toString("utf8");

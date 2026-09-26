@@ -193,7 +193,7 @@ export interface AppDeps {
   /** Project and personal memory notes: `# note`, /memory. */
   memory?: MemoryPort;
   /** The session's MCP servers: status for /mcp, and sign-in with /mcp login. */
-  mcp?: Pick<McpControl, "status" | "login" | "promptCommands" | "expandPrompt">;
+  mcp?: Pick<McpControl, "status" | "login" | "promptCommands" | "expandPrompt" | "refresh">;
   /** Include the user's global Claude Code / Codex instruction files (config `claudeSettings`). */
   userInstructions?: boolean;
   /** This workspace's hooks and permission rules: applied per run, listed by /hooks and /permissions. */
@@ -1401,6 +1401,16 @@ export function App(deps: AppDeps): ReactNode {
         const word = arg.trim().toLowerCase();
         // `/trust yes` trusts, `/trust no` takes it back; plain `/trust` shows what would be trusted.
         const choice = command.name === "/trust" ? word : "";
+        if (choice === "no" && busyRef.current) {
+          // The running task already holds this folder's hooks and rules — stop it before taking them back.
+          dispatch({
+            t: "notice",
+            level: "warn",
+            text: "A task is running with this folder's settings — stop it (esc) first, then /trust no.",
+          });
+          break;
+        }
+        const wasTrusted = choice === "no" && settings?.projectTrusted() === true;
         const text = !settings
           ? "No hooks, permission rules or project settings."
           : choice === "yes"
@@ -1414,6 +1424,8 @@ export function App(deps: AppDeps): ReactNode {
                     : settings.trustSummary()
                 ).join("\n");
         dispatch({ t: "notice", level: "info", text });
+        // The folder's MCP servers are already connected — reconnect without them, now.
+        if (wasTrusted) void deps.mcp?.refresh();
         break;
       }
       case "/memory": {

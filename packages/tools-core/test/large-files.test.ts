@@ -84,7 +84,18 @@ describe("reading large files", () => {
   });
 
   it("splits lines exactly like split(/\\r?\\n/), for any window", async () => {
-    const samples = ["", "a", "a\n", "a\r\nb", "\n\n", "one\ntwo\r\nthree\n", "é漢\n字😀\r\n"];
+    const samples = [
+      "",
+      "a",
+      "a\n",
+      "a\r\nb",
+      "\n\n",
+      "one\ntwo\r\nthree\n",
+      "é漢\n字😀\r\n",
+      "tail\r",
+      "a\r\n\r",
+      "\r\n",
+    ];
     for (const text of samples) {
       writeFileSync(join(ws, "s.txt"), text);
       const all = text.split(/\r?\n/);
@@ -107,7 +118,21 @@ describe("reading large files", () => {
     const got = await readLineWindow(join(ws, "min.js"), 0, 2, 100);
     expect(got.lines[0]).toBe(`${"a".repeat(100)} … (line cut at 100 characters)`);
     expect(got.lines[1]).toBe("next");
+    expect(got.cut).toBe(true);
+    // A line exactly at the cap, ended by CRLF, isn't cut.
+    writeFileSync(join(ws, "crlf.txt"), `${"b".repeat(100)}\r\nnext`);
+    const exact = await readLineWindow(join(ws, "crlf.txt"), 0, 1, 100);
+    expect(exact).toEqual({ lines: ["b".repeat(100)], more: true, cut: false });
   });
+
+  it.runIf(posix)(
+    "stops at the end of the window instead of scanning a huge next line",
+    async () => {
+      sparseFile(join(ws, "one.log"), "first\n", 64 * 1024 ** 3); // line 2 is 64 GB of zeros (sparse)
+      const got = await readLineWindow(join(ws, "one.log"), 0, 1, 100);
+      expect(got).toEqual({ lines: ["first"], more: true, cut: false });
+    },
+  );
 
   it.runIf(posix)("won't load a file too large to edit", async () => {
     sparseFile(join(ws, "dump.sql"), "x", MAX_EDIT_BYTES + 1);
@@ -138,5 +163,29 @@ describe("apply_patch when a write fails", () => {
     ).rejects.toThrow(/couldn't write b\.txt .*nothing was changed/);
     expect(readFileSync(join(ws, "a.txt"), "utf8")).toBe("alpha\n");
     expect(readFileSync(join(ws, "b.txt"), "utf8")).toBe("beta\n");
+  });
+});
+
+describe("write when the file appears meanwhile", () => {
+  it("never overwrites or removes a file it didn't create", async () => {
+    const { writeAllOrRestore } = await import("../src/text-file.js");
+    writeFileSync(join(ws, "theirs.txt"), "someone else's\n");
+    await expect(
+      writeAllOrRestore([
+        { abs: join(ws, "theirs.txt"), path: "theirs.txt", before: undefined, after: "mine\n" },
+      ]),
+    ).rejects.toThrow(/something is already there.*nothing was changed/);
+    expect(readFileSync(join(ws, "theirs.txt"), "utf8")).toBe("someone else's\n");
+  });
+
+  it("rolling back leaves alone a file something else changed meanwhile", async () => {
+    const { restore } = await import("../src/text-file.js");
+    const a = { abs: join(ws, "a.txt"), path: "a.txt", before: "old\n", after: "new\n" };
+    writeFileSync(a.abs, "an editor's change\n");
+    expect(await restore(a, false, false)).toBe(false);
+    expect(readFileSync(a.abs, "utf8")).toBe("an editor's change\n");
+    writeFileSync(a.abs, "new\n"); // still what the tool wrote → goes back
+    expect(await restore(a, false, false)).toBe(true);
+    expect(readFileSync(a.abs, "utf8")).toBe("old\n");
   });
 });

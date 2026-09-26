@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -123,19 +131,54 @@ export function projectFingerprint(
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex").slice(0, 32);
 }
 
-function saveTrust(file: string, workspaceRoot: string, fingerprint: string | undefined): void {
-  const { [workspaceRoot]: _previous, ...others } = readTrust(file);
-  const next = fingerprint === undefined ? others : { ...others, [workspaceRoot]: fingerprint };
-  mkdirSync(dirname(file), { recursive: true });
-  // A fresh name created exclusively (never through a file or link already there), removed if the save fails.
-  const tmp = `${file}.${randomUUID()}.tmp`;
-  try {
-    writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600, flag: "wx" });
-    renameSync(tmp, file);
-  } catch (err) {
-    rmSync(tmp, { force: true });
-    throw err;
+const LOCK_WAIT_MS = 3_000;
+const LOCK_STALE_MS = 10_000;
+const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/** Run `fn` holding `<file>.lock` (a folder, created atomically), so two ambient processes saving the trust
+ *  file don't undo each other's change. A lock left by a crashed process is cleared once it's stale. */
+function withLock<T>(file: string, fn: () => T): T {
+  const lock = `${file}.lock`;
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      mkdirSync(lock);
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS)
+          rmSync(lock, { recursive: true, force: true });
+      } catch {
+        // gone already — try again
+      }
+      if (Date.now() > deadline) throw new Error("another ambient is saving it — try again");
+      pause(25);
+    }
   }
+  try {
+    return fn();
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
+}
+
+function saveTrust(file: string, workspaceRoot: string, fingerprint: string | undefined): void {
+  mkdirSync(dirname(file), { recursive: true });
+  withLock(file, () => {
+    // Read inside the lock, so a save made meanwhile by another process is kept.
+    const { [workspaceRoot]: _previous, ...others } = readTrust(file);
+    const next = fingerprint === undefined ? others : { ...others, [workspaceRoot]: fingerprint };
+    // A fresh name created exclusively (never through a file or link already there), removed if the save fails.
+    const tmp = `${file}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+      renameSync(tmp, file);
+    } catch (err) {
+      rmSync(tmp, { force: true });
+      throw err;
+    }
+  });
 }
 
 const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
@@ -144,9 +187,11 @@ const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 function pluginLines(ids: string[], width = 88): string[] {
   const byMarket = new Map<string, string[]>();
   for (const id of ids) {
+    // Grouped only when the id is really name@marketplace; anything else is shown whole.
     const at = id.lastIndexOf("@");
-    const market = at > 0 ? id.slice(at + 1) : "";
-    const name = at > 0 ? id.slice(0, at) : id;
+    const grouped = at > 0 && at < id.length - 1;
+    const market = grouped ? id.slice(at + 1) : "";
+    const name = grouped ? id.slice(0, at) : id;
     byMarket.set(market, [...(byMarket.get(market) ?? []), visible(name)]);
   }
   const out: string[] = [];
@@ -509,8 +554,7 @@ export function makeWorkspaceSettings(opts: {
       } catch (e) {
         return `Couldn't save the trust setting: ${(e as Error).message}`;
       }
-      const mcp = snapshot().projectMcp.length > 0 ? " (its MCP servers: after a restart)" : "";
-      return `This folder's own settings are off again${mcp}. /trust shows them.`;
+      return "This folder's own settings are off again. /trust shows them.";
     },
   };
 }

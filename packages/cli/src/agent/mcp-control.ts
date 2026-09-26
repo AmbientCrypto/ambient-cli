@@ -23,6 +23,8 @@ export interface McpControl {
   promptCommands(): McpPromptCommand[];
   /** A prompt's text with its arguments filled in from what the user typed after the command. */
   expandPrompt(command: string, args: string): Promise<string>;
+  /** Reconnect every server from the current config and trust (servers no longer allowed are dropped). */
+  refresh(): Promise<void>;
   close(): void;
 }
 
@@ -70,6 +72,7 @@ export function makeMcpControl(opts: {
 
   return {
     start: () => reconnect().catch(() => {}),
+    refresh: () => reconnect().catch(() => {}),
     status: () => current?.servers,
     tools: () => current?.currentTools() ?? [],
     promptCommands: () =>

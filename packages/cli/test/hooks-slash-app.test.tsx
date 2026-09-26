@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 import type { WorkspaceSettings } from "../src/agent/workspace-settings.js";
 import { App } from "../src/tui/App.js";
 
+type AppMcp = NonNullable<Parameters<typeof App>[0]["mcp"]>;
+
 const model: CatalogModel = {
   id: "vendor/m",
   name: "m",
@@ -21,12 +23,13 @@ const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const stubWriter = () =>
   ({ append() {}, close() {}, path: "/dev/null" }) as unknown as SessionWriter;
 
-function mount(settings: WorkspaceSettings) {
+function mount(settings: WorkspaceSettings, extra: { mcp?: AppMcp; hold?: Promise<void> } = {}) {
   const requests: ChatParams[] = [];
   const client = {
     fetchCatalog: async () => [model],
     chat: async (p: ChatParams) => {
       requests.push({ ...p, messages: [...p.messages] });
+      await extra.hold;
       return { content: "ok", toolCalls: [] };
     },
   } as unknown as ChatClient;
@@ -42,6 +45,7 @@ function mount(settings: WorkspaceSettings) {
       cwd="/nonexistent-ws"
       workspaceRoot="/nonexistent-ws"
       settings={settings}
+      {...(extra.mcp ? { mcp: extra.mcp } : {})}
     />,
   );
   const type = async (text: string) => {
@@ -112,6 +116,54 @@ describe("/hooks", () => {
     const third = requests.at(-1)?.messages.filter((m) => JSON.stringify(m).includes("third"));
     expect(third?.length).toBeGreaterThan(0);
     expect(JSON.stringify(third)).not.toContain("HOOK-CONTEXT");
+    ui.unmount();
+  });
+});
+
+describe("/trust no", () => {
+  it("waits for a running task, then turns the folder's settings off and drops its MCP servers", async () => {
+    let trusted = true;
+    let untrusts = 0;
+    let refreshes = 0;
+    const settings = {
+      hooksPort: () => undefined,
+      rules: () => undefined,
+      hooksSummary: () => [],
+      permissionsSummary: () => [],
+      trustSummary: () => [],
+      trust: () => "",
+      untrust: () => {
+        untrusts++;
+        trusted = false;
+        return "This folder's own settings are off again.";
+      },
+      untrustedCount: () => 0,
+      projectTrusted: () => trusted,
+    } as WorkspaceSettings;
+    const mcp: AppMcp = {
+      status: () => [],
+      login: async () => "",
+      promptCommands: () => [],
+      expandPrompt: async () => "",
+      refresh: async () => {
+        refreshes++;
+      },
+    };
+    let release = () => {};
+    const hold = new Promise<void>((r) => {
+      release = r;
+    });
+    const { ui, type } = mount(settings, { mcp, hold });
+    await settle(30);
+    await type("a long task");
+    await type("/trust no");
+    expect(ui.lastFrame()).toContain("stop it (esc) first, then /trust no");
+    expect(untrusts).toBe(0);
+    release();
+    await settle(300);
+    await type("/trust no");
+    expect(ui.lastFrame()).toContain("settings are off again");
+    expect([untrusts, refreshes]).toEqual([1, 1]);
     ui.unmount();
   });
 });

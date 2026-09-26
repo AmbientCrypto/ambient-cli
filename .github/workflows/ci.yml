@@ -55,4 +55,4 @@ jobs:
           # gate — but it must have started and loaded the bundled tools.
           ambient doctor > doctor.txt 2>&1 || true
           cat doctor.txt
-          grep -q "built-in tools" doctor.txt
+          grep -qE "[1-9][0-9]* built-in tools" doctor.txt
