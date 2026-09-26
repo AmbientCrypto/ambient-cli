@@ -35,7 +35,9 @@ export const searchSkillsTool: ToolDefinition<z.infer<typeof Input>, z.infer<typ
   inputSchema: Input,
   outputSchema: Output,
   async execute(input, ctx: ToolContext) {
-    const hits = searchSkills(ctx.workspaceRoot, input.query);
+    const hits = searchSkills(ctx.workspaceRoot, input.query, undefined, undefined, {
+      projectSettings: ctx.projectPlugins === true,
+    });
     return {
       matches: hits.map((s) => ({ name: s.name, description: s.description })),
       count: hits.length,

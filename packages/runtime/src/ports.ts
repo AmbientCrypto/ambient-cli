@@ -239,6 +239,8 @@ export interface RunOptions {
   artifact?: (content: string) => string | undefined;
   /** Read a previously-offloaded artifact by handle (backs the read_artifact tool). Absent ⇒ no retrieval. */
   readArtifact?: (handle: string) => string | undefined;
+  /** The folder's own plugin choices apply to the plugin skills and agents tools find (it is trusted). */
+  projectPlugins?: boolean;
   /**
    * Optional prior-session transcript for warm-continue resume. Injected into the SYSTEM prompt (NOT as
    * chat messages) so it never displaces the compaction goal anchor (system + the new instruction).

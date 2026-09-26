@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { listField, parseFrontmatter, textField } from "./frontmatter.js";
 import { MAX_DIR_ENTRIES, isRealDir, readTextCappedSafe, readUserMarkdown } from "./fs-safe.js";
-import { installedPlugins } from "./plugins.js";
+import { type PluginOptions, installedPlugins } from "./plugins.js";
 
 /**
  * Discover reusable SUBAGENT presets from a user's existing Claude Code setup (`.claude/agents/*.md`) plus
@@ -113,14 +113,18 @@ export function parseAgent(text: string, fallbackName?: string): AgentPreset | n
 }
 
 /** Discover agent presets across roots (project > user), first-wins by name. */
-export function discoverAgents(workspaceRoot: string, home: string = homedir()): AgentPreset[] {
+export function discoverAgents(
+  workspaceRoot: string,
+  home: string = homedir(),
+  plugins: PluginOptions = {},
+): AgentPreset[] {
   // Project folders never follow symlinks; the user's own ~/.claude/agents may link agents in from elsewhere.
   const roots: Array<{ dir: string; user: boolean; prefix?: string }> = [
     { dir: join(workspaceRoot, ".ambient", "agents"), user: false },
     { dir: join(workspaceRoot, ".claude", "agents"), user: false },
     { dir: join(home, ".claude", "agents"), user: true },
     // Enabled Claude Code plugins' agents, named `plugin:agent` the way Claude Code names them.
-    ...installedPlugins(workspaceRoot, home).map((p) => ({
+    ...installedPlugins(workspaceRoot, home, plugins).map((p) => ({
       dir: join(p.root, "agents"),
       user: false,
       prefix: `${p.name}:`,

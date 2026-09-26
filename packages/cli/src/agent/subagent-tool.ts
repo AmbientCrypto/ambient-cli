@@ -44,6 +44,8 @@ export interface SubagentToolDeps {
   hurry?: () => boolean;
   /** The session's permission rules, obeyed by children too. */
   permissionRules?: PermissionRules;
+  /** The folder's own plugin choices apply (it is trusted). */
+  projectPlugins?: boolean;
   /** Injectable clock (test hook); defaults to real time. */
   now?: () => number;
   /** The user's agent presets, listed in the tool description so the model can pick one by name. */
@@ -209,7 +211,9 @@ export function makeSubagentTool(deps: SubagentToolDeps): ToolDefinition {
       // Resolve a `preset` to a discovered agent (the user's own Claude `.claude/agents/*.md`): its body
       // becomes the child's system-prompt prefix and its model the default — so existing agents "just work".
       const presets = new Map<string, AgentPreset>(
-        discoverAgents(ctx.workspaceRoot).map((a) => [a.name, a]),
+        discoverAgents(ctx.workspaceRoot, undefined, {
+          projectSettings: ctx.projectPlugins === true,
+        }).map((a) => [a.name, a]),
       );
       const specs = input.spawn.map((s) => {
         const preset = s.preset ? presets.get(s.preset) : undefined;
@@ -247,6 +251,7 @@ export function makeSubagentTool(deps: SubagentToolDeps): ToolDefinition {
         ...(deps.verify ? { verify: deps.verify } : {}),
         ...(deps.hooks ? { hooks: deps.hooks } : {}),
         ...(deps.permissionRules ? { permissionRules: deps.permissionRules } : {}),
+        ...(deps.projectPlugins ? { projectPlugins: true } : {}),
         ...(deps.hurry ? { hurry: deps.hurry } : {}),
         ...(deps.ask ? { ask: deps.ask } : {}),
         buildChildRegistry: (role, allowed) =>

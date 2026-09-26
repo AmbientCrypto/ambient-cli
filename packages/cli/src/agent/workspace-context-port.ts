@@ -19,7 +19,12 @@ import { gitState } from "./git-state.js";
  */
 export function makeWorkspaceContextPort(
   now: () => Date = () => new Date(),
-  opts: { stableRepoMap?: boolean; userInstructions?: boolean } = {},
+  opts: {
+    stableRepoMap?: boolean;
+    userInstructions?: boolean;
+    /** Whether the folder's own plugin choices apply now (it is trusted). */
+    projectPlugins?: () => boolean;
+  } = {},
 ): WorkspaceContextPort {
   // With `stableRepoMap` (one port per interactive session) the map is built once per workspace + budget: it
   // sits in the system prompt, and rebuilding it after every edit would change the prompt and defeat the
@@ -46,7 +51,10 @@ export function makeWorkspaceContextPort(
     platform: () => process.platform,
     // Only the CURATED skills auto-load into the prompt (the user's own) — the hundreds of bundled plugin +
     // Codex skills are discoverable via `ambient skills` and evocable by name, not force-fed every turn.
-    skills: (workspaceRoot) => discoverInjectableSkills(workspaceRoot),
+    skills: (workspaceRoot) =>
+      discoverInjectableSkills(workspaceRoot, undefined, {
+        projectSettings: opts.projectPlugins?.() === true,
+      }),
     repoMap: map,
     // Read-only git snapshot (branch / changed files / recent commits) at run start — so the agent isn't
     // blind to git without spending tool calls. Undefined outside a repo.

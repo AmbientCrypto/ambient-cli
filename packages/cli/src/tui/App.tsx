@@ -418,7 +418,12 @@ export function App(deps: AppDeps): ReactNode {
     makeWorkspaceContextPort(undefined, {
       stableRepoMap: true,
       userInstructions: deps.userInstructions === true,
+      projectPlugins: () => deps.settings?.projectTrusted() === true,
     }),
+  );
+  // Whether the folder is trusted, updated by /trust yes|no, so the palette's plugin commands follow it.
+  const [folderTrusted, setFolderTrusted] = useState(
+    () => deps.settings?.projectTrusted() === true,
   );
   // Discover the user's existing Claude/Codex slash commands ONCE — their names join the palette, their
   // bodies (with $ARGUMENTS/$1 expansion) run as a task on dispatch.
@@ -426,7 +431,8 @@ export function App(deps: AppDeps): ReactNode {
     const palette: SlashCommand[] = [];
     const bodies = new Map<string, CustomCommand>();
     try {
-      for (const c of discoverCommands(deps.workspaceRoot)) {
+      const plugins = { projectSettings: folderTrusted };
+      for (const c of discoverCommands(deps.workspaceRoot, undefined, plugins)) {
         const name = `/${c.name}`;
         palette.push({
           name,
@@ -457,7 +463,7 @@ export function App(deps: AppDeps): ReactNode {
       });
     }
     return { palette, bodies };
-  }, [deps.workspaceRoot, deps.skills]);
+  }, [deps.workspaceRoot, deps.skills, folderTrusted]);
   // MCP prompts join the menu as `/mcp__server__prompt` once their servers connect (in the background).
   const commandPalette = [...customCommands.palette, ...(deps.mcp?.promptCommands() ?? [])];
   const [picker, setPickerState] = useState<"model" | "effort" | "skills" | null>(null);
@@ -802,6 +808,7 @@ export function App(deps: AppDeps): ReactNode {
         workspacePortRef.current = makeWorkspaceContextPort(undefined, {
           stableRepoMap: true,
           userInstructions: deps.userInstructions === true,
+          projectPlugins: () => deps.settings?.projectTrusted() === true,
         });
       }
       // The conversation as it stood before this run (after any fresh-session reset above) — restored if the
@@ -908,6 +915,9 @@ export function App(deps: AppDeps): ReactNode {
         // Hooks are re-read per run, so an edited settings file or a newly trusted project applies right away.
         const hooks = deps.settings?.hooksPort(() => sessionId);
         const permissionRules = deps.settings?.rules();
+        // A trusted folder's own plugin choices apply to plugin skills and agents, as to its hooks and MCP.
+        const projectPlugins = deps.settings?.projectTrusted() === true;
+        const pluginOpts = { projectSettings: projectPlugins };
         const opts: RunOptions = {
           sessionId,
           mode: runtimeMode,
@@ -956,6 +966,7 @@ export function App(deps: AppDeps): ReactNode {
           ...(lastEffortRef.current ? { priorEffort: lastEffortRef.current } : {}),
           ...(hooks ? { hooks } : {}),
           ...(permissionRules ? { permissionRules } : {}),
+          ...(projectPlugins ? { projectPlugins: true } : {}),
           runState: runStateRef.current,
           nextModel: () => {
             const m = pendingSwitchRef.current;
@@ -971,7 +982,7 @@ export function App(deps: AppDeps): ReactNode {
         const registry = buildRegistry({
           ...(mcpTools && mcpTools.length > 0 ? { mcpTools } : {}),
           subagent: makeSubagentTool({
-            presets: discoverAgents(deps.workspaceRoot),
+            presets: discoverAgents(deps.workspaceRoot, undefined, pluginOpts),
             client: deps.client,
             workspace: opts.workspace,
             approve,
@@ -981,6 +992,7 @@ export function App(deps: AppDeps): ReactNode {
             ...(goalRef.current ? { goal: goalRef.current } : {}), // children inherit the north-star
             ...(hooks ? { hooks } : {}),
             ...(permissionRules ? { permissionRules } : {}),
+            ...(projectPlugins ? { projectPlugins: true } : {}),
             hurry: () => hurryRef.current,
             effort: effortRef.current,
             mcpTools: () => mcpTools ?? [],
@@ -1424,6 +1436,8 @@ export function App(deps: AppDeps): ReactNode {
                     : settings.trustSummary()
                 ).join("\n");
         dispatch({ t: "notice", level: "info", text });
+        if (settings && (choice === "yes" || choice === "no"))
+          setFolderTrusted(settings.projectTrusted());
         // The folder's MCP servers are already connected — reconnect without them, now.
         if (wasTrusted) void deps.mcp?.refresh();
         break;
@@ -1653,7 +1667,9 @@ export function App(deps: AppDeps): ReactNode {
           // Read the command file again now: what runs must be what's on disk and trusted today, not the copy
           // loaded when the session started (a branch checkout can change it in between).
           const current =
-            discoverCommands(deps.workspaceRoot).find((c) => `/${c.name}` === command.name) ?? body;
+            discoverCommands(deps.workspaceRoot, undefined, {
+              projectSettings: deps.settings?.projectTrusted() === true,
+            }).find((c) => `/${c.name}` === command.name) ?? body;
           void runTaskRef.current?.(
             expandSlashCommand(current, splitArgs(arg), {
               workspaceRoot: deps.workspaceRoot,

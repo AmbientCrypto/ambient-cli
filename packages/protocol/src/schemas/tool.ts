@@ -89,6 +89,9 @@ export interface ToolContext {
   /** Whether your deny rules keep this absolute path from being read — tools that walk folders skip such
    *  files, and `read` refuses them. Optional — absent ⇒ no read rules. */
   readDenied?(absPath: string): boolean;
+  /** Whether the folder's own plugin choices apply (it is trusted) when finding plugin skills and agents.
+   *  Optional — absent ⇒ only your own plugin settings. */
+  projectPlugins?: boolean;
   /** The session's background shell commands (`bash` with `background: true`). Optional — absent ⇒ none. */
   backgroundJobs?: BackgroundJobsPort;
   /** Work that runs beside the agent and reports back at a turn boundary. Absent ⇒ not available. */

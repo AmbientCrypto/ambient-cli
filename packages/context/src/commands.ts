@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { listField, parseFrontmatter, textField } from "./frontmatter.js";
 import { MAX_DIR_ENTRIES, isRealDir, isRealFile, readTextCappedSafe } from "./fs-safe.js";
-import { installedPlugins } from "./plugins.js";
+import { type PluginOptions, installedPlugins } from "./plugins.js";
 
 /**
  * Discover reusable SLASH COMMANDS from a user's existing Claude Code (`.claude/commands/**.md`) and Codex
@@ -87,14 +87,19 @@ function walk(dir: string, prefix: string, depth: number): { rel: string; full: 
  * Discover slash commands across roots (precedence: Claude project/user → Codex → ambient → enabled Claude
  * plugins, whose commands are named `plugin:command`), first-wins.
  */
-export function discoverCommands(workspaceRoot: string, home: string = homedir()): SlashCommand[] {
+/** `plugins.projectSettings`: the (trusted) project's own plugin choices apply, as for its hooks and MCP. */
+export function discoverCommands(
+  workspaceRoot: string,
+  home: string = homedir(),
+  plugins: PluginOptions = {},
+): SlashCommand[] {
   const roots: { dir: string; source: "project" | "user"; prefix?: string }[] = [
     { dir: join(workspaceRoot, ".claude", "commands"), source: "project" },
     { dir: join(home, ".claude", "commands"), source: "user" },
     { dir: join(workspaceRoot, ".codex", "prompts"), source: "project" },
     { dir: join(home, ".codex", "prompts"), source: "user" },
     { dir: join(workspaceRoot, ".ambient", "commands"), source: "project" },
-    ...installedPlugins(workspaceRoot, home).map((p) => ({
+    ...installedPlugins(workspaceRoot, home, plugins).map((p) => ({
       dir: join(p.root, "commands"),
       source: "user" as const,
       prefix: `${p.name}:`,

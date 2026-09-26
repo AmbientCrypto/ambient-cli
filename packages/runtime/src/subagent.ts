@@ -82,6 +82,8 @@ export interface SubagentDeps {
   hurry?: () => boolean;
   /** The session's permission rules — a child obeys the same denials. */
   permissionRules?: PermissionRules;
+  /** Children find plugin skills and agents the way the parent does. */
+  projectPlugins?: boolean;
   /** Asking the user (backs a child's `ask_user`); questions from parallel children are asked one at a time. */
   ask?: AskPort;
   /** Build a child's registry for a role — MUST NOT include the `subagent` tool (structural depth cap).
@@ -344,6 +346,7 @@ function runOneChild(
     ...(spec.instructions ? { instructions: spec.instructions } : {}),
     ...(deps.hooks ? { hooks: childHooks(deps.hooks) } : {}),
     ...(deps.permissionRules ? { permissionRules: deps.permissionRules } : {}),
+    ...(deps.projectPlugins ? { projectPlugins: true } : {}),
     // Route by role when the model is on `auto` — including an explicit `spec.model === "auto"` that a Claude
     // preset produced (opus/sonnet/haiku map to "auto"); only a CONCRETE model id suppresses routing.
     ...(spec.model && spec.model !== "auto" ? {} : { routedRole: ROUTED_ROLE[role] }),

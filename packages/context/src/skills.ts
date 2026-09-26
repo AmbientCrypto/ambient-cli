@@ -12,7 +12,7 @@ import {
   readTextCappedSafe,
   readUserMarkdown,
 } from "./fs-safe.js";
-import { installedPlugins } from "./plugins.js";
+import { type PluginOptions, installedPlugins } from "./plugins.js";
 
 /**
  * Agent Skills — progressive disclosure (the single most-converged pattern in the field).
@@ -83,11 +83,11 @@ export function parseSkill(
 /** Find every `skills/` directory under `~/.claude/plugins` (installed Claude plugins ship skills at varying
  *  depths — `plugins/<name>/skills` and the official cache's `plugins/cache/<repo>/<plugin>/<ver>/skills`).
  *  A bounded, symlink-safe walk (skips node_modules/.git, depth + count capped) so launch stays fast. */
-function pluginSkillRoots(workspaceRoot: string, home: string): string[] {
+function pluginSkillRoots(workspaceRoot: string, home: string, plugins: PluginOptions): string[] {
   // Installed + enabled plugins, at their current version. Only without an install record (older setups)
   // fall back to scanning the plugins folder.
   if (isRealFile(join(home, ".claude", "plugins", "installed_plugins.json"))) {
-    return installedPlugins(workspaceRoot, home)
+    return installedPlugins(workspaceRoot, home, plugins)
       .map((p) => join(p.root, "skills"))
       .filter((d) => isRealDir(d));
   }
@@ -134,10 +134,10 @@ function curatedSkillRoots(workspaceRoot: string, home: string): string[] {
 
 /** ALL roots — curated PLUS installed Claude plugins and Codex skills. Used by `ambient skills` (the full
  *  scrape) and by on-demand body loading, so any discovered skill is inspectable + evocable by name. */
-function skillRoots(workspaceRoot: string, home: string): string[] {
+function skillRoots(workspaceRoot: string, home: string, plugins: PluginOptions = {}): string[] {
   return [
     ...curatedSkillRoots(workspaceRoot, home),
-    ...pluginSkillRoots(workspaceRoot, home),
+    ...pluginSkillRoots(workspaceRoot, home, plugins),
     join(workspaceRoot, ".codex", "skills"),
     join(home, ".codex", "skills"),
   ];
@@ -204,8 +204,13 @@ function readSkillFile(path: string, root: string, home: string): string | null 
  * Codex skills. Used by `ambient skills` (the full scrape) and on-demand body loading, so any of them is
  * inspectable + evocable by name. May be large; do NOT force this whole set into the prompt.
  */
-export function discoverSkills(workspaceRoot: string, home: string = homedir()): SkillMeta[] {
-  return withBuiltins(discoverFrom(skillRoots(workspaceRoot, home), home));
+/** `plugins.projectSettings`: the (trusted) project's own plugin choices apply, as for its hooks and MCP. */
+export function discoverSkills(
+  workspaceRoot: string,
+  home: string = homedir(),
+  plugins: PluginOptions = {},
+): SkillMeta[] {
+  return withBuiltins(discoverFrom(skillRoots(workspaceRoot, home, plugins), home));
 }
 
 /** Hard cap on how many skills load into EVERY turn's system prompt. A user with a big personal library
@@ -223,6 +228,7 @@ export const MAX_INJECTED_SKILLS = 40;
 export function discoverInjectableSkills(
   workspaceRoot: string,
   home: string = homedir(),
+  plugins: PluginOptions = {},
 ): SkillMeta[] {
   // Built-in skills (e.g. `github`) are always in the injectable catalog — a user skill of the same name wins.
   // Skills marked `disable-model-invocation` are only for the user to run; the model's catalog skips them.
@@ -234,7 +240,9 @@ export function discoverInjectableSkills(
   if (pinned.length === 0) return curated.slice(0, MAX_INJECTED_SKILLS);
   // PINNED skills always load first (they survive the window budget) and may be pinned from ANY root — resolve
   // them from the full pool by name, then append the curated set, deduped, and cap the whole thing.
-  const byName = new Map(modelVisible(discoverSkills(workspaceRoot, home)).map((s) => [s.name, s]));
+  const byName = new Map(
+    modelVisible(discoverSkills(workspaceRoot, home, plugins)).map((s) => [s.name, s]),
+  );
   const out: SkillMeta[] = [];
   const seen = new Set<string>();
   for (const name of pinned) {
@@ -371,8 +379,9 @@ export function searchSkills(
   query: string,
   home: string = homedir(),
   limit = 12,
+  plugins: PluginOptions = {},
 ): SkillMeta[] {
-  const all = discoverSkills(workspaceRoot, home).filter((s) => !s.disableModelInvocation);
+  const all = discoverSkills(workspaceRoot, home, plugins).filter((s) => !s.disableModelInvocation);
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (terms.length === 0) return all.slice(0, limit);
   const scored: { s: SkillMeta; score: number }[] = [];
@@ -480,9 +489,10 @@ export function loadSkill(
   workspaceRoot: string,
   name: string,
   home: string = homedir(),
+  plugins: PluginOptions = {},
 ): { body: string; dir?: string } | undefined {
-  const roots = skillRoots(workspaceRoot, home);
-  for (const s of discoverSkills(workspaceRoot, home)) {
+  const roots = skillRoots(workspaceRoot, home, plugins);
+  for (const s of discoverSkills(workspaceRoot, home, plugins)) {
     if (s.name !== name) continue;
     // A built-in skill's body lives in code, not on disk — return it directly (user skills of the same name
     // are ordered first, so this only fires when there's no overriding user skill). No sidecar dir.
@@ -511,6 +521,7 @@ export function loadSkillBody(
   workspaceRoot: string,
   name: string,
   home: string = homedir(),
+  plugins: PluginOptions = {},
 ): string | undefined {
-  return loadSkill(workspaceRoot, name, home)?.body;
+  return loadSkill(workspaceRoot, name, home, plugins)?.body;
 }

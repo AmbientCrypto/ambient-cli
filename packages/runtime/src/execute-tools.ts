@@ -433,6 +433,7 @@ export async function executeTools(
     emit: opts.emit,
     ...(opts.checkpoint ? { checkpoint: opts.checkpoint } : {}),
     ...(opts.readArtifact ? { readArtifact: opts.readArtifact } : {}),
+    ...(opts.projectPlugins ? { projectPlugins: true } : {}),
     // The interactive-question port (backs `ask_user`) — present only at the top level, so a subagent child
     // never blocks on a human it can't reach (its ctx omits `ask`, and the tool returns a proceed note).
     ...(opts.ask ? { ask: opts.ask } : {}),

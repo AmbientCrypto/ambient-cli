@@ -65,8 +65,11 @@ export function expandTaskCommand(
   if (!m?.[1]) return { task };
   const name = m[1];
   const args = m[2] ?? "";
-  const command = discoverCommands(cwd).find((c) => c.name === name);
-  const skill = command ? undefined : discoverSkills(cwd).find((s) => s.name === name);
+  const plugins = { projectSettings: projectTrusted };
+  const command = discoverCommands(cwd, undefined, plugins).find((c) => c.name === name);
+  const skill = command
+    ? undefined
+    : discoverSkills(cwd, undefined, plugins).find((s) => s.name === name);
   if (!command && !skill) {
     // "/tmp is full": a real path on disk is a task about that path, not a mistyped command.
     return existsSync(`/${name}`) ? { task } : { error: `unknown command /${name}` };
@@ -295,6 +298,7 @@ export async function runAgent(args: string[]): Promise<void> {
     capabilities: makeCapabilityPort(),
     workspace: makeWorkspaceContextPort(undefined, {
       userInstructions: userConfig.claudeSettings === true,
+      projectPlugins: () => settings.projectTrusted(),
     }),
     verify: makeVerifyPort(cwd, () => settings.projectTrusted()),
     checkpoint: (content) => saveObject(sessionId, content),
@@ -307,6 +311,7 @@ export async function runAgent(args: string[]): Promise<void> {
     ...(a.appendSystemPrompt ? { instructions: a.appendSystemPrompt } : {}),
     ...(hooks ? { hooks } : {}),
     ...(permissionRules ? { permissionRules } : {}),
+    ...(settings.projectTrusted() ? { projectPlugins: true } : {}),
     effort: a.effort,
   };
 
@@ -330,7 +335,7 @@ export async function runAgent(args: string[]): Promise<void> {
     const registry = buildRegistry({
       mcpTools: mcp.tools,
       subagent: makeSubagentTool({
-        presets: discoverAgents(cwd),
+        presets: discoverAgents(cwd, undefined, { projectSettings: settings.projectTrusted() }),
         client,
         workspace: opts.workspace,
         approve: opts.approve,
@@ -341,6 +346,7 @@ export async function runAgent(args: string[]): Promise<void> {
         ...(opts.verify ? { verify: opts.verify } : {}),
         ...(hooks ? { hooks } : {}),
         ...(permissionRules ? { permissionRules } : {}),
+        ...(settings.projectTrusted() ? { projectPlugins: true } : {}),
         mcpTools: () => mcp.tools,
         ...(opts.ask ? { ask: opts.ask } : {}),
       }),

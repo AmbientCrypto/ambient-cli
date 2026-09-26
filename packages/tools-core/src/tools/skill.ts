@@ -37,7 +37,9 @@ export const skillTool: ToolDefinition<z.infer<typeof Input>, z.infer<typeof Out
   inputSchema: Input,
   outputSchema: Output,
   async execute(input, ctx: ToolContext) {
-    const loaded = loadSkill(ctx.workspaceRoot, input.name);
+    const loaded = loadSkill(ctx.workspaceRoot, input.name, undefined, {
+      projectSettings: ctx.projectPlugins === true,
+    });
     if (loaded === undefined) {
       return {
         name: input.name,

@@ -7,6 +7,8 @@ import {
   skillSource,
   unpinSkill,
 } from "@amb/context";
+import { workspaceSettings } from "../agent/workspace-settings.js";
+import { configDir, loadConfig } from "../config.js";
 import { add, bold, cyan, dim } from "../render/color.js";
 
 const ROOTS_HELP =
@@ -19,6 +21,11 @@ const ROOTS_HELP =
  * manages the always-load list. Skills auto-load as a lightweight catalog budgeted to the served model's
  * window; the agent pulls a skill's body on demand — or you can name any skill in your prompt to steer it.
  */
+/** A trusted folder's own plugin choices apply, as they do in a session. */
+const pluginsFor = (cwd: string) => ({
+  projectSettings: workspaceSettings(cwd, loadConfig(), configDir()).projectTrusted(),
+});
+
 export async function runSkills(args: string[]): Promise<void> {
   const cwd = process.cwd();
   const [sub, ...rest] = args;
@@ -35,7 +42,7 @@ export async function runSkills(args: string[]): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    const body = loadSkillBody(cwd, name);
+    const body = loadSkillBody(cwd, name, undefined, pluginsFor(cwd));
     if (body === undefined) {
       process.stderr.write(
         `ambient: no skill named "${name}" — run 'ambient skills' to see what's available.\n`,
@@ -56,7 +63,7 @@ export async function runSkills(args: string[]): Promise<void> {
     }
     if (sub === "pin") {
       // Pin any discovered skill — even a plugin/Codex one — so it ALWAYS auto-loads (survives the window budget).
-      if (loadSkillBody(cwd, name) === undefined) {
+      if (loadSkillBody(cwd, name, undefined, pluginsFor(cwd)) === undefined) {
         process.stderr.write(
           `ambient: no skill named "${name}" to pin — run 'ambient skills' to see the names.\n`,
         );
@@ -79,9 +86,10 @@ export async function runSkills(args: string[]): Promise<void> {
   }
 
   const json = args.includes("--json");
-  const skills = discoverSkills(cwd);
+  const plugins = pluginsFor(cwd);
+  const skills = discoverSkills(cwd, undefined, plugins);
   const pinned = new Set(readPinnedSkills(cwd));
-  const injectable = new Set(discoverInjectableSkills(cwd).map((s) => s.name));
+  const injectable = new Set(discoverInjectableSkills(cwd, undefined, plugins).map((s) => s.name));
 
   if (json) {
     process.stdout.write(
