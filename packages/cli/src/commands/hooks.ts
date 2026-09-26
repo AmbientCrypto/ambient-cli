@@ -1,7 +1,7 @@
 import { workspaceSettings } from "../agent/workspace-settings.js";
 import { configDir, loadConfig } from "../config.js";
 
-/** `ambient trust` shows what this project's own settings ask for; `ambient trust yes` trusts exactly that. */
+/** `ambient trust` shows what this project's own settings ask for; `yes` trusts exactly that, `no` takes it back. */
 export async function runTrust(args: string[]): Promise<void> {
   const config = loadConfig();
   const settings = workspaceSettings(process.cwd(), config, configDir());
@@ -10,11 +10,11 @@ export async function runTrust(args: string[]): Promise<void> {
     process.stdout.write(`${settings.trustSummary().join("\n")}\n`);
     return;
   }
-  if (sub === "yes") {
-    process.stdout.write(`${settings.trust()}\n`);
+  if (sub === "yes" || sub === "no") {
+    process.stdout.write(`${sub === "yes" ? settings.trust() : settings.untrust()}\n`);
     return;
   }
-  process.stderr.write(`ambient: unknown trust command "${sub}" (use: ambient trust [yes])\n`);
+  process.stderr.write(`ambient: unknown trust command "${sub}" (use: ambient trust [yes|no])\n`);
   process.exitCode = 1;
 }
 

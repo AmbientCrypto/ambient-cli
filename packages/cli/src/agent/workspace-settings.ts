@@ -123,8 +123,9 @@ export function projectFingerprint(
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex").slice(0, 32);
 }
 
-function saveTrust(file: string, workspaceRoot: string, fingerprint: string): void {
-  const next = { ...readTrust(file), [workspaceRoot]: fingerprint };
+function saveTrust(file: string, workspaceRoot: string, fingerprint: string | undefined): void {
+  const { [workspaceRoot]: _previous, ...others } = readTrust(file);
+  const next = fingerprint === undefined ? others : { ...others, [workspaceRoot]: fingerprint };
   mkdirSync(dirname(file), { recursive: true });
   // A fresh name created exclusively (never through a file or link already there), removed if the save fails.
   const tmp = `${file}.${randomUUID()}.tmp`;
@@ -192,6 +193,8 @@ export interface WorkspaceSettings {
   trustSummary(): string[];
   /** Trust the project's current hooks and allow rules; returns what happened. */
   trust(): string;
+  /** Stop trusting the project (its settings go back to off); returns what happened. */
+  untrust(): string;
   /** How many project hooks, allow rules and MCP servers are waiting to be trusted. */
   untrustedCount(): number;
   /** Whether the project's own settings (hooks, allow rules, MCP servers) are trusted as they are now. */
@@ -372,8 +375,8 @@ export function makeWorkspaceSettings(opts: {
         ];
       const lines: string[] = [
         s.trusted
-          ? "This project's settings are trusted:"
-          : "This project's own settings (off until you trust them):",
+          ? "This project's own settings are trusted and on:"
+          : "This project has settings of its own. They are OFF — ambient ignores them until you trust the project:",
       ];
       // Everything is shown in full (nothing cut short), with control characters made visible, so what you
       // trust is exactly what you read.
@@ -402,7 +405,7 @@ export function makeWorkspaceSettings(opts: {
       }
       const pluginChoices = Object.entries(s.projectPlugins);
       if (pluginChoices.length > 0) {
-        lines.push(" Claude Code plugins it turns on or off:");
+        lines.push(" Claude Code plugins it switches on or off:");
         for (const [id, on] of pluginChoices)
           lines.push(`  ${visible(id)}: ${on === true ? "on" : "off"}`);
       }
@@ -419,12 +422,16 @@ export function makeWorkspaceSettings(opts: {
         lines.push(` Verify script ${v.file} (runs after the agent changes files):`);
         for (const l of v.content.replace(/\n$/, "").split("\n")) lines.push(`    ${visible(l)}`);
       }
-      if (!s.trusted) {
-        lines.push(
-          "",
-          "/trust yes turns on exactly this (ambient trust yes in a shell); a change needs trusting again.",
-        );
-      }
+      lines.push(
+        "",
+        ...(s.trusted
+          ? ["/trust no     turn them off again (ambient trust no in a shell)"]
+          : [
+              "/trust yes    turn on exactly what's listed (ambient trust yes in a shell)",
+              "do nothing    they stay off — ambient works as usual, just without them",
+              "If the project later changes any of this, it goes back to off until you trust it again.",
+            ]),
+      );
       return lines;
     },
     trust() {
@@ -470,7 +477,18 @@ export function makeWorkspaceSettings(opts: {
           : mcp > 0
             ? "on from your next message (MCP servers: next launch)"
             : "on from your next message or run";
-      return `Trusted this project's ${list} — ${when}.`;
+      return `Trusted this project's ${list} — ${when}. /trust no turns them off again.`;
+    },
+    untrust() {
+      if (!(opts.workspaceRoot in readTrust(opts.trustFile)))
+        return "This project isn't trusted — its own settings are already off.";
+      try {
+        saveTrust(opts.trustFile, opts.workspaceRoot, undefined);
+      } catch (e) {
+        return `Couldn't save the trust setting: ${(e as Error).message}`;
+      }
+      const mcp = snapshot().projectMcp.length > 0 ? " (its MCP servers: after a restart)" : "";
+      return `This project's own settings are off again${mcp}. /trust shows them.`;
     },
   };
 }

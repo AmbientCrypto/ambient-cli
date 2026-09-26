@@ -72,11 +72,15 @@ describe("/hooks", () => {
         trusted = true;
         return "Trusted this project's 1 hook. They apply from the next message.";
       },
+      untrust: () => {
+        trusted = false;
+        return "This project's own settings are off again.";
+      },
       untrustedCount: () => (trusted ? 0 : 1),
       projectTrusted: () => trusted,
       trustSummary: () => [
-        "This project's own settings (off until you trust them):",
-        "/trust yes turns on exactly this",
+        "This project has settings of its own. They are OFF",
+        "/trust yes    turn on exactly what's listed",
       ],
     };
     const { ui, type, requests } = mount(hooks);
@@ -92,7 +96,7 @@ describe("/hooks", () => {
 
     expect(ui.lastFrame()).toContain("Project hooks, rules, MCP servers and verify script");
     await type("/trust");
-    expect(ui.lastFrame()).toContain("/trust yes turns on exactly this");
+    expect(ui.lastFrame()).toContain("/trust yes    turn on exactly what's listed");
     expect(trusted).toBe(false);
     await type("/trust yes");
     expect(ui.lastFrame()).toContain("Trusted this project's 1 hook");
@@ -100,6 +104,14 @@ describe("/hooks", () => {
     await type("second");
     expect(JSON.stringify(requests.at(-1)?.messages)).toContain("HOOK-CONTEXT");
     expect(ports.every((s) => s.startsWith("ses_"))).toBe(true);
+
+    await type("/trust no");
+    expect(ui.lastFrame()).toContain("settings are off again");
+    await type("third");
+    // Earlier turns keep what the hook added then; the new message gets nothing from it.
+    const third = requests.at(-1)?.messages.filter((m) => JSON.stringify(m).includes("third"));
+    expect(third?.length).toBeGreaterThan(0);
+    expect(JSON.stringify(third)).not.toContain("HOOK-CONTEXT");
     ui.unmount();
   });
 });

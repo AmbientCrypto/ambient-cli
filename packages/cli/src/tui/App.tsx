@@ -1399,18 +1399,20 @@ export function App(deps: AppDeps): ReactNode {
       case "/trust": {
         const settings = deps.settings;
         const word = arg.trim().toLowerCase();
-        // `/trust yes` trusts; plain `/trust` shows what would be trusted.
-        const confirm = command.name === "/trust" && word === "yes";
+        // `/trust yes` trusts, `/trust no` takes it back; plain `/trust` shows what would be trusted.
+        const choice = command.name === "/trust" ? word : "";
         const text = !settings
           ? "No hooks, permission rules or project settings."
-          : confirm
+          : choice === "yes"
             ? settings.trust()
-            : (command.name === "/hooks"
-                ? settings.hooksSummary()
-                : command.name === "/permissions"
-                  ? settings.permissionsSummary()
-                  : settings.trustSummary()
-              ).join("\n");
+            : choice === "no"
+              ? settings.untrust()
+              : (command.name === "/hooks"
+                  ? settings.hooksSummary()
+                  : command.name === "/permissions"
+                    ? settings.permissionsSummary()
+                    : settings.trustSummary()
+                ).join("\n");
         dispatch({ t: "notice", level: "info", text });
         break;
       }

@@ -52,7 +52,7 @@ describe("permission rules from every source", () => {
     expect(s.permissionsSummary().join("\n")).toContain("allow  Bash(make:*)  (waits for /trust)");
 
     expect(s.trust()).toBe(
-      "Trusted this project's 1 allow rule — on from your next message or run.",
+      "Trusted this project's 1 allow rule — on from your next message or run. /trust no turns them off again.",
     );
     expect(texts(s.rules()).allow).toEqual(["Bash(npm test:*)", "Bash(make:*)"]);
 
@@ -237,5 +237,26 @@ describe("the trusted-projects file", () => {
     expect(readdirSync(join(dir, "cfg"))).toEqual(["trusted-projects.json"]);
     const saved = JSON.parse(readFileSync(trustFile, "utf8")) as Record<string, unknown>;
     expect(Object.keys(saved).sort()).toEqual(["/other", ws].sort());
+  });
+});
+
+describe("saying no to a project's settings", () => {
+  it("/trust no turns them off again and leaves other projects trusted", async () => {
+    const { readFileSync } = await import("node:fs");
+    writeSettings(ws, "settings.json", { permissions: { allow: ["Bash(make:*)"] } });
+    mkdirSync(join(dir, "cfg"), { recursive: true });
+    writeFileSync(trustFile, JSON.stringify({ "/other": "abc" }));
+    const s = makeWorkspaceSettings({ workspaceRoot: ws, home, trustFile, config: {} });
+    const off = s.trustSummary().join("\n");
+    expect(off).toContain("They are OFF");
+    expect(off).toContain("/trust yes    turn on exactly what's listed");
+    expect(off).toContain("do nothing    they stay off");
+    expect(s.untrust()).toBe("This project isn't trusted — its own settings are already off.");
+    expect(s.trust()).toContain("/trust no turns them off again");
+    expect(s.trustSummary().join("\n")).toContain("/trust no     turn them off again");
+    expect(s.untrust()).toBe("This project's own settings are off again. /trust shows them.");
+    expect(s.projectTrusted()).toBe(false);
+    expect(s.rules()?.allow.map((r) => r.text) ?? []).not.toContain("Bash(make:*)");
+    expect(JSON.parse(readFileSync(trustFile, "utf8"))).toEqual({ "/other": "abc" });
   });
 });

@@ -57,8 +57,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   },
   {
     name: "/trust",
-    args: "[yes]",
-    desc: "Review, then trust, this project's hooks, rules, MCP servers and verify script",
+    args: "[yes|no]",
+    desc: "Review this project's own hooks, rules, MCP servers and plugins; yes turns them on, no off",
   },
   { name: "/login", desc: "Add or change your Ambient API key (checked before saving)" },
   { name: "/logout", desc: "Remove the saved API key from this machine" },
