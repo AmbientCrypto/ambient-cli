@@ -47,12 +47,12 @@ describe("permission rules from every source", () => {
     });
     expect(s.untrustedCount()).toBe(1);
     expect(untrustedNote(s)).toBe(
-      "Project hooks, rules, MCP servers and verify script are off until trusted: ambient trust",
+      "This folder has settings of its own (plugins, hooks, rules or MCP servers) — off until trusted: ambient trust",
     );
     expect(s.permissionsSummary().join("\n")).toContain("allow  Bash(make:*)  (waits for /trust)");
 
     expect(s.trust()).toBe(
-      "Trusted this project's 1 allow rule — on from your next message or run. /trust no turns them off again.",
+      "Trusted this folder's 1 allow rule — on from your next message or run. /trust no turns them off again.",
     );
     expect(texts(s.rules()).allow).toEqual(["Bash(npm test:*)", "Bash(make:*)"]);
 
@@ -86,13 +86,46 @@ describe("permission rules from every source", () => {
     expect(s.rules()).toBeUndefined();
   });
 
+  it("run from the home folder, your own plugin choices aren't a project's to trust", () => {
+    writeSettings(home, "settings.json", { enabledPlugins: { "github@official": true } });
+    const s = makeWorkspaceSettings({ workspaceRoot: home, home, trustFile, config: {} });
+    expect(s.untrustedCount()).toBe(0);
+    expect(s.trustSummary().join("\n")).toContain("no settings of its own to trust");
+  });
+
+  it("lists a project's plugins briefly, grouped by where they come from", () => {
+    const on = Object.fromEntries(
+      [
+        "frontend-design",
+        "superpowers",
+        "code-review",
+        "github",
+        "code-simplifier",
+        "feature-dev",
+        "commit-commands",
+        "security-guidance",
+        "typescript-lsp",
+        "context7",
+      ].map((n) => [`${n}@official`, true]),
+    );
+    writeSettings(ws, "settings.json", {
+      enabledPlugins: { ...on, "hud@hud": true, "old@official": false },
+    });
+    const s = makeWorkspaceSettings({ workspaceRoot: ws, home, trustFile, config: {} });
+    const text = s.trustSummary().join("\n");
+    expect(text).toContain(
+      " Claude Code plugins it turns on (11):\n   from official: frontend-design, superpowers,",
+    );
+    expect(text).toContain("   from hud: hud");
+    expect(text).toContain(" Claude Code plugins it turns off (1):\n   from official: old");
+    expect(s.trustSummary().every((l) => l.length <= 100)).toBe(true);
+  });
+
   it("no rules anywhere says how to add them", () => {
     const s = makeWorkspaceSettings({ workspaceRoot: ws, home, trustFile, config: {} });
     expect(s.rules()).toBeUndefined();
     expect(s.permissionsSummary()[0]).toContain('under "permissions"');
-    expect(s.trust()).toBe(
-      "This project has no hooks, rules, MCP servers, shell commands or verify script to trust.",
-    );
+    expect(s.trust()).toBe("This folder has no settings of its own to trust.");
   });
 });
 
@@ -131,7 +164,9 @@ describe("what trusting a project covers", () => {
     s.trust();
     writeSettings(ws, "settings.json", { enabledPlugins: { "guard@mkt": false } });
     expect(s.projectTrusted()).toBe(false);
-    expect(s.trustSummary().join("\n")).toContain("guard@mkt: off");
+    expect(s.trustSummary().join("\n")).toContain(
+      " Claude Code plugins it turns off (1):\n   from mkt: guard",
+    );
   });
 
   it("says plainly which of your environment variables a remote server would be sent", () => {
@@ -248,13 +283,13 @@ describe("saying no to a project's settings", () => {
     writeFileSync(trustFile, JSON.stringify({ "/other": "abc" }));
     const s = makeWorkspaceSettings({ workspaceRoot: ws, home, trustFile, config: {} });
     const off = s.trustSummary().join("\n");
-    expect(off).toContain("They are OFF");
+    expect(off).toContain("They're OFF until you trust them");
     expect(off).toContain("/trust yes    turn on exactly what's listed");
     expect(off).toContain("do nothing    they stay off");
-    expect(s.untrust()).toBe("This project isn't trusted — its own settings are already off.");
+    expect(s.untrust()).toBe("This folder isn't trusted — its own settings are already off.");
     expect(s.trust()).toContain("/trust no turns them off again");
     expect(s.trustSummary().join("\n")).toContain("/trust no     turn them off again");
-    expect(s.untrust()).toBe("This project's own settings are off again. /trust shows them.");
+    expect(s.untrust()).toBe("This folder's own settings are off again. /trust shows them.");
     expect(s.projectTrusted()).toBe(false);
     expect(s.rules()?.allow.map((r) => r.text) ?? []).not.toContain("Bash(make:*)");
     expect(JSON.parse(readFileSync(trustFile, "utf8"))).toEqual({ "/other": "abc" });

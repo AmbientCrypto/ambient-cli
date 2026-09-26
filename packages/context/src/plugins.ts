@@ -39,9 +39,14 @@ export interface PluginOptions {
   projectSettings?: boolean;
 }
 
-/** The project's own `enabledPlugins` entries (shared, then local) — part of what trusting a project covers. */
-export function projectEnabledPlugins(workspaceRoot: string): Record<string, unknown> {
+/** The project's own `enabledPlugins` entries (shared, then local) — part of what trusting a project covers.
+ *  Run from the home folder, `~/.claude` holds the user's own settings, so there is no project's to trust. */
+export function projectEnabledPlugins(
+  workspaceRoot: string,
+  home: string = homedir(),
+): Record<string, unknown> {
   const dir = join(workspaceRoot, ".claude");
+  if (dir === join(home, ".claude")) return {};
   const out: Record<string, unknown> = {};
   for (const name of ["settings.json", "settings.local.json"]) {
     const data = readJson(join(dir, name), dir) as

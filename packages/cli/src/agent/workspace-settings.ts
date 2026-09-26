@@ -140,6 +140,30 @@ function saveTrust(file: string, workspaceRoot: string, fingerprint: string | un
 
 const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 
+/** Plugin ids (`name@marketplace`) as short lines: grouped by where they come from, names wrapped. */
+function pluginLines(ids: string[], width = 88): string[] {
+  const byMarket = new Map<string, string[]>();
+  for (const id of ids) {
+    const at = id.lastIndexOf("@");
+    const market = at > 0 ? id.slice(at + 1) : "";
+    const name = at > 0 ? id.slice(0, at) : id;
+    byMarket.set(market, [...(byMarket.get(market) ?? []), visible(name)]);
+  }
+  const out: string[] = [];
+  for (const [market, names] of byMarket) {
+    let line = `   ${market ? `from ${visible(market)}:` : ""}`;
+    for (const [i, name] of names.entries()) {
+      const piece = i < names.length - 1 ? `${name},` : name;
+      if (line.length + 1 + piece.length > width && line.trim().length > 0) {
+        out.push(line);
+        line = `    ${piece}`;
+      } else line = line.trim().length > 0 ? `${line} ${piece}` : `${line}${piece}`;
+    }
+    out.push(line);
+  }
+  return out;
+}
+
 const HOOK_SOURCE: Record<HookCommand["source"], string> = {
   ambient: "ambient config",
   project: "this project (.claude/settings)",
@@ -226,7 +250,7 @@ export function makeWorkspaceSettings(opts: {
       (m) => m.source === "project",
     );
     const projectCommands = projectShellCommands(opts.workspaceRoot, home);
-    const projectPlugins = projectEnabledPlugins(opts.workspaceRoot);
+    const projectPlugins = projectEnabledPlugins(opts.workspaceRoot, home);
     const projectVerify = verifyScripts(opts.workspaceRoot);
     const trusted =
       (hooks.project.length > 0 ||
@@ -370,13 +394,11 @@ export function makeWorkspaceSettings(opts: {
     trustSummary() {
       const s = snapshot();
       if (projectItems(s) === 0)
-        return [
-          "This project has no hooks, rules, MCP servers, shell commands or verify script of its own.",
-        ];
+        return ["This folder has no settings of its own to trust — nothing is waiting for you."];
       const lines: string[] = [
         s.trusted
-          ? "This project's own settings are trusted and on:"
-          : "This project has settings of its own. They are OFF — ambient ignores them until you trust the project:",
+          ? "This folder's own settings are trusted, so they're ON:"
+          : "This folder has settings of its own. They're OFF until you trust them:",
       ];
       // Everything is shown in full (nothing cut short), with control characters made visible, so what you
       // trust is exactly what you read.
@@ -404,10 +426,11 @@ export function makeWorkspaceSettings(opts: {
         }
       }
       const pluginChoices = Object.entries(s.projectPlugins);
-      if (pluginChoices.length > 0) {
-        lines.push(" Claude Code plugins it switches on or off:");
-        for (const [id, on] of pluginChoices)
-          lines.push(`  ${visible(id)}: ${on === true ? "on" : "off"}`);
+      for (const on of [true, false]) {
+        const ids = pluginChoices.filter(([, v]) => (v === true) === on).map(([id]) => id);
+        if (ids.length === 0) continue;
+        lines.push(` Claude Code plugins it turns ${on ? "on" : "off"} (${ids.length}):`);
+        lines.push(...pluginLines(ids));
       }
       if (s.projectCommands.length > 0) {
         lines.push(" Commands that run shell lines when you use them:");
@@ -425,11 +448,11 @@ export function makeWorkspaceSettings(opts: {
       lines.push(
         "",
         ...(s.trusted
-          ? ["/trust no     turn them off again (ambient trust no in a shell)"]
+          ? ["/trust no     turn them off again"]
           : [
-              "/trust yes    turn on exactly what's listed (ambient trust yes in a shell)",
-              "do nothing    they stay off — ambient works as usual, just without them",
-              "If the project later changes any of this, it goes back to off until you trust it again.",
+              "/trust yes    turn on exactly what's listed",
+              "do nothing    they stay off — ambient works as usual without them",
+              "(If this folder's settings change later, they go back to off until you trust them again.)",
             ]),
       );
       return lines;
@@ -442,8 +465,7 @@ export function makeWorkspaceSettings(opts: {
       const cmds = s.projectCommands.length;
       const plugins = Object.keys(s.projectPlugins).length;
       const verify = s.projectVerify.length;
-      if (projectItems(s) === 0)
-        return "This project has no hooks, rules, MCP servers, shell commands or verify script to trust.";
+      if (projectItems(s) === 0) return "This folder has no settings of its own to trust.";
       if (s.trusted) return "This project's settings are already trusted.";
       try {
         saveTrust(
@@ -473,22 +495,22 @@ export function makeWorkspaceSettings(opts: {
         parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts[0];
       const when =
         cmds + hooks + allow + verify === 0
-          ? "its MCP servers connect the next time ambient starts"
+          ? "on from the next time ambient starts"
           : mcp > 0
             ? "on from your next message (MCP servers: next launch)"
             : "on from your next message or run";
-      return `Trusted this project's ${list} — ${when}. /trust no turns them off again.`;
+      return `Trusted this folder's ${list} — ${when}. /trust no turns them off again.`;
     },
     untrust() {
       if (!(opts.workspaceRoot in readTrust(opts.trustFile)))
-        return "This project isn't trusted — its own settings are already off.";
+        return "This folder isn't trusted — its own settings are already off.";
       try {
         saveTrust(opts.trustFile, opts.workspaceRoot, undefined);
       } catch (e) {
         return `Couldn't save the trust setting: ${(e as Error).message}`;
       }
       const mcp = snapshot().projectMcp.length > 0 ? " (its MCP servers: after a restart)" : "";
-      return `This project's own settings are off again${mcp}. /trust shows them.`;
+      return `This folder's own settings are off again${mcp}. /trust shows them.`;
     },
   };
 }
@@ -505,6 +527,6 @@ export function workspaceSettings(
 /** A one-line heads-up when the project has settings that won't apply yet (headless runs can't ask). */
 export function untrustedNote(settings: WorkspaceSettings): string | undefined {
   return settings.untrustedCount() > 0
-    ? "Project hooks, rules, MCP servers and verify script are off until trusted: ambient trust"
+    ? "This folder has settings of its own (plugins, hooks, rules or MCP servers) — off until trusted: ambient trust"
     : undefined;
 }

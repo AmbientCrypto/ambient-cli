@@ -649,7 +649,7 @@ export function App(deps: AppDeps): ReactNode {
       dispatch({
         t: "notice",
         level: "info",
-        text: "Project hooks, rules, MCP servers and verify script are off until you review them: /trust",
+        text: "This folder has settings of its own (plugins, hooks, rules or MCP servers) — they're off until you review them: /trust",
       });
     }
   }, []);

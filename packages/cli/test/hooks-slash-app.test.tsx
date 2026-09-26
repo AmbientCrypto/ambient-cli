@@ -94,7 +94,7 @@ describe("/hooks", () => {
     await type("first");
     expect(JSON.stringify(requests.at(-1)?.messages)).not.toContain("HOOK-CONTEXT");
 
-    expect(ui.lastFrame()).toContain("Project hooks, rules, MCP servers and verify script");
+    expect(ui.lastFrame()).toContain("This folder has settings of its own (plugins, hooks");
     await type("/trust");
     expect(ui.lastFrame()).toContain("/trust yes    turn on exactly what's listed");
     expect(trusted).toBe(false);

@@ -201,7 +201,7 @@ describe.skipIf(process.platform === "win32")("running hooks", () => {
       "1 hook that won't run until you trust it:",
     );
 
-    expect(control.trust()).toContain("Trusted this project's 1 hook");
+    expect(control.trust()).toContain("Trusted this folder's 1 hook");
     const out = await control
       .hooksPort(() => "s")
       ?.run("UserPromptSubmit", { prompt: "hi" }, signal());
