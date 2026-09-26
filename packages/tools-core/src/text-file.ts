@@ -97,7 +97,14 @@ export async function readLineWindow(
     finishLine(false); // the text after the last newline is a line too (empty when the file ends with one)
     return { lines, more: index > end, cut };
   } finally {
-    stream.destroy();
+    // Wait for the file to be closed, not just asked to close: on Windows an open handle keeps the file (and
+    // its folder) from being removed right after.
+    if (!stream.closed) {
+      await new Promise<void>((resolve) => {
+        stream.once("close", () => resolve());
+        stream.destroy();
+      });
+    }
   }
 }
 

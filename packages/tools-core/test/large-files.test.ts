@@ -30,7 +30,7 @@ afterEach(() => {
   try {
     chmodSync(join(ws, "b.txt"), 0o644);
   } catch {}
-  rmSync(ws, { recursive: true, force: true });
+  rmSync(ws, { recursive: true, force: true, maxRetries: 5 });
 });
 const ctx = (): ToolContext => ({
   cwd: ws,
