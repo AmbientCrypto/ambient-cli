@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -41,9 +41,13 @@ export function trustFilePath(configFolder: string): string {
 
 function readTrust(file: string): Record<string, string> {
   try {
-    return existsSync(file)
-      ? (JSON.parse(readFileSync(file, "utf8")) as Record<string, string>)
-      : {};
+    if (!existsSync(file)) return {};
+    const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    // Only workspace → fingerprint strings count; anything else in a hand-edited file is ignored.
+    return Object.fromEntries(
+      Object.entries(parsed).filter((e): e is [string, string] => typeof e[1] === "string"),
+    );
   } catch {
     return {};
   }
@@ -122,9 +126,15 @@ export function projectFingerprint(
 function saveTrust(file: string, workspaceRoot: string, fingerprint: string): void {
   const next = { ...readTrust(file), [workspaceRoot]: fingerprint };
   mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-  renameSync(tmp, file);
+  // A fresh name created exclusively (never through a file or link already there), removed if the save fails.
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+    renameSync(tmp, file);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
 }
 
 const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;

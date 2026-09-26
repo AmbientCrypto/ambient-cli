@@ -222,3 +222,20 @@ describe("a verify script that isn't a plain file", () => {
     },
   );
 });
+
+describe("the trusted-projects file", () => {
+  it("is saved without leftovers and keeps other projects; stray values in it are ignored", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    writeSettings(ws, "settings.json", { permissions: { allow: ["Bash(make:*)"] } });
+    mkdirSync(join(dir, "cfg"), { recursive: true });
+    // A hand-edited file: another project's entry plus values that aren't fingerprints.
+    writeFileSync(trustFile, JSON.stringify({ "/other": "abc", "/odd": { x: 1 }, "/n": 5 }));
+    const s = makeWorkspaceSettings({ workspaceRoot: ws, home, trustFile, config: {} });
+    expect(s.projectTrusted()).toBe(false);
+    s.trust();
+    expect(s.projectTrusted()).toBe(true);
+    expect(readdirSync(join(dir, "cfg"))).toEqual(["trusted-projects.json"]);
+    const saved = JSON.parse(readFileSync(trustFile, "utf8")) as Record<string, unknown>;
+    expect(Object.keys(saved).sort()).toEqual(["/other", ws].sort());
+  });
+});

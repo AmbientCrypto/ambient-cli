@@ -51,4 +51,8 @@ jobs:
           bash scripts/pack.sh
           npm install -g ./dist-pack/ambient-code-*.tgz
           ambient --version
-          ambient doctor || true
+          # doctor exits 1 when Ambient can't be reached (a runner's network), so its exit code alone can't
+          # gate — but it must have started and loaded the bundled tools.
+          ambient doctor > doctor.txt 2>&1 || true
+          cat doctor.txt
+          grep -q "built-in tools" doctor.txt

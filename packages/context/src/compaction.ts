@@ -30,8 +30,6 @@ export interface CompactionPlan<T extends CompactableMessage = CompactableMessag
   kept: T[];
   /** The immovable part of `kept`: the leading anchor plus every pinned message, in original order. */
   anchor: T[];
-  /** Index in the original array where `kept` begins. */
-  keepFromIndex: number;
 }
 
 export interface CompactionConfig {
@@ -120,12 +118,7 @@ export function planCompaction<T extends CompactableMessage>(
   // instead of the request.
   const toSummarize = rest.slice(0, cut).filter((m) => m.pinned !== true);
   const recent = [...rest.slice(0, cut).filter((m) => m.pinned === true), ...rest.slice(cut)];
-  return {
-    toSummarize,
-    kept: [...anchor, ...recent],
-    anchor,
-    keepFromIndex: messages.length - recent.length,
-  };
+  return { toSummarize, kept: [...anchor, ...recent], anchor };
 }
 
 /** The fixed structured-summary skeleton the summarizer model must fill (task-tuned, not free-form). */

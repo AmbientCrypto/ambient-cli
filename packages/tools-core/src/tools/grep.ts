@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
 import type { ToolContext, ToolDefinition } from "@amb/protocol";
 import { z } from "zod";
@@ -86,9 +86,10 @@ export const grepTool: ToolDefinition<z.infer<typeof Input>, z.infer<typeof Outp
       ctx.signal.throwIfAborted();
       let content: string;
       try {
-        const buf = await readFile(join(root, rel));
-        if (buf.byteLength > MAX_FILE_BYTES) continue;
-        content = buf.toString("utf8");
+        const abs = join(root, rel);
+        const st = await stat(abs); // size first, so a huge file is skipped without being read
+        if (!st.isFile() || st.size > MAX_FILE_BYTES) continue;
+        content = (await readFile(abs)).toString("utf8");
       } catch {
         continue;
       }

@@ -1,10 +1,10 @@
-import { readFile, writeFile } from "node:fs/promises";
 import type { ToolContext, ToolDefinition } from "@amb/protocol";
 import { z } from "zod";
 import { unifiedDiff } from "../diff.js";
 import { sha256 } from "../hash.js";
 import { applyHunk } from "../patch.js";
 import { resolveInWorkspace } from "../paths.js";
+import { readForEdit, writeAllOrRestore } from "../text-file.js";
 
 const Input = z.object({
   path: z.string().describe("File to edit, relative to the workspace root"),
@@ -41,7 +41,7 @@ export const editTool: ToolDefinition<z.infer<typeof Input>, z.infer<typeof Outp
   outputSchema: Output,
   async execute(input, ctx: ToolContext) {
     const abs = resolveInWorkspace(ctx.workspaceRoot, input.path);
-    const before = await readFile(abs, "utf8");
+    const before = await readForEdit(abs, input.path);
     const preimageHash = sha256(before);
     if (input.expectPreimageHash && input.expectPreimageHash !== preimageHash) {
       throw new Error(
@@ -56,7 +56,7 @@ export const editTool: ToolDefinition<z.infer<typeof Input>, z.infer<typeof Outp
       input.path,
     );
     ctx.checkpoint?.(before); // save the pre-image for `amb rewind`
-    await writeFile(abs, after, "utf8");
+    await writeAllOrRestore([{ abs, path: input.path, before, after }]);
     return {
       path: input.path,
       operation: "modify" as const,

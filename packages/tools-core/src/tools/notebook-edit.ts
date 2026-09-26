@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
 import type { ToolContext, ToolDefinition } from "@amb/protocol";
 import { z } from "zod";
 import { unifiedDiff } from "../diff.js";
 import { sha256 } from "../hash.js";
 import { resolveInWorkspace } from "../paths.js";
+import { readForEdit, writeAllOrRestore } from "../text-file.js";
 
 const Input = z.object({
   path: z.string().describe("The .ipynb notebook, relative to the workspace root"),
@@ -82,7 +82,7 @@ export const notebookEditTool: ToolDefinition<z.infer<typeof Input>, z.infer<typ
     if (!input.path.toLowerCase().endsWith(".ipynb"))
       throw new Error(`${input.path} isn't a notebook (.ipynb)`);
     const abs = resolveInWorkspace(ctx.workspaceRoot, input.path);
-    const prior = await readFile(abs, "utf8");
+    const prior = await readForEdit(abs, input.path);
     let nb: { cells?: Cell[]; nbformat?: number; nbformat_minor?: number };
     try {
       nb = JSON.parse(prior);
@@ -130,7 +130,7 @@ export const notebookEditTool: ToolDefinition<z.infer<typeof Input>, z.infer<typ
     ctx.checkpoint?.(prior); // the pre-image, for `amb rewind`
     // Jupyter writes one-space indentation and a trailing newline.
     const content = `${JSON.stringify({ ...nb, cells }, null, 1)}\n`;
-    await writeFile(abs, content, "utf8");
+    await writeAllOrRestore([{ abs, path: input.path, before: prior, after: content }]);
     return {
       path: input.path,
       operation: "modify",

@@ -1,10 +1,10 @@
-import { readFile, writeFile } from "node:fs/promises";
 import type { ToolContext, ToolDefinition } from "@amb/protocol";
 import { z } from "zod";
 import { unifiedDiff } from "../diff.js";
 import { sha256 } from "../hash.js";
 import { applyHunk } from "../patch.js";
 import { resolveInWorkspace } from "../paths.js";
+import { readForEdit, writeAllOrRestore } from "../text-file.js";
 
 const EditSpec = z.object({
   path: z.string().describe("File to edit, relative to the workspace root"),
@@ -39,7 +39,8 @@ const Output = z.object({
 /**
  * `apply_patch` — one VALIDATED multi-hunk / multi-file edit primitive (aider edit-pipeline). It
  * applies several exact-substring edits across files ATOMICALLY: every hunk is matched + applied in-memory
- * FIRST; only if ALL succeed does anything get written — so a patch never leaves the workspace half-edited.
+ * FIRST; only if ALL succeed does anything get written, and a write that fails midway (disk full, a read-only
+ * file) puts back the files already written — so a patch never leaves the workspace half-edited.
  * Same conflict-safe primitive as `edit` (applyHunk): exact unique match, never a fuzzy guess. Modifies
  * existing files only (use `write` for new files).
  */
@@ -78,7 +79,7 @@ export const applyPatchTool: ToolDefinition<z.infer<typeof Input>, z.infer<typeo
       replacements: number;
     }[] = [];
     for (const [abs, { path, edits }] of byFile) {
-      const before = await readFile(abs, "utf8");
+      const before = await readForEdit(abs, path);
       let content = before;
       let replacements = 0;
       for (const e of edits) {
@@ -89,11 +90,11 @@ export const applyPatchTool: ToolDefinition<z.infer<typeof Input>, z.infer<typeo
       staged.push({ path, abs, before, after: content, replacements });
     }
 
-    // Phase 2 — write all validated files.
+    // Phase 2 — write all validated files; a failed write puts back the ones already written.
+    for (const s of staged) ctx.checkpoint?.(s.before); // save each file's pre-image for `amb rewind`
+    await writeAllOrRestore(staged);
     const files = [];
     for (const s of staged) {
-      ctx.checkpoint?.(s.before); // save each file's pre-image for `amb rewind`
-      await writeFile(s.abs, s.after, "utf8");
       files.push({
         path: s.path,
         operation: "modify" as const,
