@@ -60,10 +60,20 @@ it("bounds JSON and log output, and handles unavailable logs", async () => {
   expect((await new GithubCiReader().logs(target, 7, new AbortController().signal)).length).toBe(
     30000,
   );
-  expect(spawn.mock.calls[1]?.[1]).toEqual(["api", "repos/owner/repo/actions/jobs/7/logs"]);
+  expect(spawn.mock.calls[1]?.[1]).toEqual([
+    "api",
+    "repos/owner/repo/actions/jobs/7/logs",
+    "--allow-escape-sequences",
+  ]);
   child("", 1, "permission denied");
   expect(await new GithubCiReader().logs(target, 7, new AbortController().signal)).toContain(
     "Logs unavailable",
+  );
+});
+it("accepts colored GitHub logs and removes terminal control sequences", async () => {
+  child("\u001b[31mfailed\u001b[0m\n\u001b[2Jdetails");
+  expect(await new GithubCiReader().logs(target, 7, new AbortController().signal)).toBe(
+    "failed\ndetails",
   );
 });
 it("does not spawn for an already cancelled request", async () => {

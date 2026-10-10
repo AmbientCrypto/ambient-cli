@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { CI_LOG_LIMIT, CiSnapshot, type CiTarget } from "./ci-schema.js";
+import { cleanTerminalOutput } from "./tools/bash.js";
 
 const RESPONSE_BYTES = 2 * 1024 * 1024;
 
@@ -71,7 +72,13 @@ export class GithubCiReader implements CiReader {
   }
   async logs(target: CiTarget, jobId: number, signal: AbortSignal): Promise<string> {
     try {
-      return await runGh(["api", `repos/${target.repo}/actions/jobs/${jobId}/logs`], signal, true);
+      return cleanTerminalOutput(
+        await runGh(
+          ["api", `repos/${target.repo}/actions/jobs/${jobId}/logs`, "--allow-escape-sequences"],
+          signal,
+          true,
+        ),
+      );
     } catch (error) {
       return `Logs unavailable: ${(error as Error).message}`;
     }
