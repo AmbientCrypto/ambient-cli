@@ -13,7 +13,9 @@ permission model you control. Run it with no arguments to open the interactive T
 
 ## Install
 
-Requires **Node ≥ 20.18**. No compiler needed — the CLI ships as a single pre-built JavaScript bundle.
+Requires **Node 22+**. Homebrew installs Node for you; npm and source installs require it first. No compiler
+is needed for npm/Homebrew: the prebuilt CLI includes an npm shrinkwrap that locks its runtime dependencies.
+Run `ambient doctor --offline` to check the active installation, Node path, dependency versions and update command.
 
 **Homebrew** (recommended):
 
@@ -38,6 +40,10 @@ installed (recommended), otherwise in PowerShell — ambient tells the model whi
 git clone https://github.com/AmbientCrypto/ambient-cli && cd ambient-cli
 ./scripts/install.sh   # builds + puts `ambient` on your PATH (~/.local/bin)
 ```
+
+The source installer uses the repository's pinned pnpm version, installs with `--frozen-lockfile`, builds,
+and checks the CLI before replacing its launchers. Run it again after `git pull` so updates install any new
+dependencies. `BIN_DIR` selects a different launcher directory. It does not alter your credentials or sessions.
 
 ### Your API key
 
@@ -206,6 +212,18 @@ machine.
 
 ## Architecture
 
+Long sessions keep a bounded live transcript; printed history belongs to your terminal scrollback and the
+durable session journal. After an abnormal interruption, startup offers to restore this folder's session.
+Ctrl+Y confirms restoration of its task, plan, checkpoint and undelivered messages. Enter, Escape or typing
+starts fresh. Normal quits and terminal closes do not trigger recovery, and a declined offer stays dismissed.
+Recovery executes only after explicit confirmation, and interrupted writes are reconciled before continuing.
+
+While a task runs, Enter queues and saves your message, then wakes a waiting tool at a safe boundary.
+For long commands, the agent uses `bash` with `background: true` followed by `bash_wait` instead of repeatedly
+polling. `watch_ci` accepts a repository (`owner/repo`) and run ID, backs off while GitHub Actions is quiet,
+and returns the first failed job and logs while continuing to monitor remaining jobs. Install and sign into
+`gh` for CI watching. The doom-loop guard still stops repeated calls that produce no progress.
+
 A TypeScript/pnpm monorepo split into a pure **harness** and a thin terminal **shell**:
 
 `protocol` (Zod contracts + a hash-chained event log) · `ambient-api` (catalog + SSE transport) ·
@@ -221,12 +239,28 @@ The runtime is a **pure event producer**; the TUI is a **pure event consumer** o
 ## Development
 
 ```bash
-pnpm install
-pnpm -r build           # → the single-file binary at packages/cli/dist/amb.js
+pnpm install --frozen-lockfile
+pnpm -r build           # → bootstrap + bundled CLI at packages/cli/dist/
 pnpm test               # vitest
 pnpm typecheck          # tsc across all packages
 pnpm lint               # biome
 ```
+
+To prepare a release, bump the workspace and CLI versions, then run:
+
+```bash
+node scripts/update-release-lock.mjs  # refresh the checked-in release shrinkwrap
+bash scripts/pack.sh                 # validates declared external imports and the release lock
+node scripts/verify-install.mjs       # isolated fresh install + upgrade from 1.0.3; TUI and lazy tools
+node scripts/stage-homebrew.mjs       # prepares the tap formula from the verified artifact
+node scripts/stress-tui.mjs           # 50,000 real TUI events/frames under a 512 MB heap limit
+bash scripts/publish-npm.sh --dry-run # checks the verified tarball without uploading
+```
+
+Publish the verified versioned tarball with `scripts/publish-npm.sh`, attach that same tarball to the GitHub
+release, and use its SHA-256 in the Homebrew formula. Publishing refuses an artifact changed after verification.
+CI tests Node 22 and 24 on macOS, Linux and Windows, including packaged fresh installs and upgrades. Update
+notices check the user's installation channel, so npm/Homebrew users are offered versions available there.
 
 ## License
 

@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { killProcessTree, machineShell, shellEnv, shellInvocation } from "./shell.js";
 import { cleanTerminalOutput } from "./tools/bash.js";
+import { type WaitOptions, type WaitReason, waitForCondition } from "./waiter.js";
 
 /**
  * Shell commands running in the background for a session (a dev server, a watcher, a long build): started by
@@ -35,6 +36,7 @@ interface JobState extends BackgroundJob {
 }
 
 export interface JobOutput {
+  idleReads?: number;
   id: string;
   command: string;
   running: boolean;
@@ -49,6 +51,9 @@ export class BackgroundJobs {
   private readonly jobs = new Map<string, JobState>();
   private next = 1;
   private readonly listeners = new Set<(job: BackgroundJob) => void>();
+  private readonly changes = new Set<(id: string) => void>();
+  private readonly emptyReads = new Map<string, number>();
+  private readonly waiters = new Map<string, number>();
 
   /** Start a command; its output collects until read. */
   start(command: string, cwd: string): BackgroundJob {
@@ -79,27 +84,35 @@ export class BackgroundJobs {
     };
     const append = (d: Buffer) => {
       const text = d.toString("utf8");
-      job.output += text;
-      job.received += text.length;
-      if (job.output.length > MAX_JOB_OUTPUT_CHARS)
-        job.output = job.output.slice(-MAX_JOB_OUTPUT_CHARS);
+      const current = this.jobs.get(id);
+      if (!current) return;
+      this.jobs.set(id, {
+        ...current,
+        output: (current.output + text).slice(-MAX_JOB_OUTPUT_CHARS),
+        received: current.received + text.length,
+      });
+      for (const change of this.changes) change(id);
     };
     child.stdout?.on("data", append);
     child.stderr?.on("data", append);
     child.on("error", (err) => {
       append(Buffer.from(`\n[could not start: ${err.message}]\n`));
-      this.finish(job, null);
+      this.finish(id, null);
     });
-    child.on("exit", (code) => this.finish(job, code));
+    // exit precedes pipe draining; close guarantees the final stdout/stderr bytes arrived.
+    child.on("close", (code) => this.finish(id, code));
     this.jobs.set(id, job);
     return this.view(job);
   }
 
-  private finish(job: JobState, code: number | null): void {
-    if (job.exitCode !== undefined) return;
-    job.exitCode = code;
-    job.finishedAt = Date.now();
-    for (const l of this.listeners) l(this.view(job));
+  private finish(id: string, code: number | null): void {
+    const job = this.jobs.get(id);
+    if (!job || job.exitCode !== undefined) return;
+    const finished = { ...job, exitCode: code, finishedAt: Date.now() };
+    this.jobs.set(id, finished);
+    for (const change of this.changes) change(id);
+    for (const l of this.listeners) l(this.view(finished));
+    this.prune();
   }
 
   private view(job: JobState): BackgroundJob {
@@ -114,9 +127,12 @@ export class BackgroundJobs {
 
   /** Let go of the oldest finished jobs whose end the agent has already seen. */
   private prune(): void {
-    const done = [...this.jobs.values()].filter((j) => j.exitCode !== undefined && j.reported);
-    for (const j of done.slice(0, Math.max(0, done.length - MAX_FINISHED_KEPT)))
+    const done = [...this.jobs.values()].filter((j) => j.exitCode !== undefined);
+    for (const j of done.slice(0, Math.max(0, done.length - MAX_FINISHED_KEPT))) {
+      if (this.waiters.has(j.id)) continue;
       this.jobs.delete(j.id);
+      this.emptyReads.delete(j.id);
+    }
   }
 
   /** New output since the last read (the model reads a job incrementally). */
@@ -127,8 +143,14 @@ export class BackgroundJobs {
     const from = Math.max(job.readTo, firstKept);
     const text = job.output.slice(from - firstKept);
     const truncated = job.readTo < firstKept;
-    job.readTo = job.received;
-    if (job.exitCode !== undefined) job.reported = true;
+    this.jobs.set(id, {
+      ...job,
+      readTo: job.received,
+      reported: job.reported || job.exitCode !== undefined,
+    });
+    const idleReads =
+      job.exitCode === undefined && text.length === 0 ? (this.emptyReads.get(id) ?? 0) + 1 : 0;
+    this.emptyReads.set(id, idleReads);
     return {
       id,
       command: job.command,
@@ -136,7 +158,43 @@ export class BackgroundJobs {
       ...(job.exitCode !== undefined ? { exitCode: job.exitCode } : {}),
       output: cleanTerminalOutput(text),
       truncated,
+      idleReads,
     };
+  }
+
+  /** Waiting does not consume output until it wakes, and never kills the underlying process. */
+  async wait(
+    id: string,
+    opts: WaitOptions & { until: "output" | "exit" },
+  ): Promise<JobOutput & { reason: WaitReason }> {
+    if (!this.jobs.has(id))
+      throw new Error(`no background command ${id} (running: ${this.idsText()})`);
+    this.waiters.set(id, (this.waiters.get(id) ?? 0) + 1);
+    try {
+      const reason = await waitForCondition(
+        (check) => {
+          const changed = (target: string) => {
+            if (target === id) check();
+          };
+          this.changes.add(changed);
+          return () => {
+            this.changes.delete(changed);
+          };
+        },
+        () => {
+          const job = this.jobs.get(id);
+          if (!job || job.exitCode !== undefined) return "exit";
+          return opts.until === "output" && job.received > job.readTo ? "output" : undefined;
+        },
+        opts,
+      );
+      return { ...this.read(id), reason };
+    } finally {
+      const remaining = (this.waiters.get(id) ?? 1) - 1;
+      if (remaining) this.waiters.set(id, remaining);
+      else this.waiters.delete(id);
+      this.prune();
+    }
   }
 
   /** Stop a job and everything it started. */
@@ -157,7 +215,7 @@ export class BackgroundJobs {
     const out: BackgroundJob[] = [];
     for (const job of this.jobs.values()) {
       if (job.exitCode !== undefined && !job.reported) {
-        job.reported = true;
+        this.jobs.set(job.id, { ...job, reported: true });
         out.push(this.view(job));
       }
     }

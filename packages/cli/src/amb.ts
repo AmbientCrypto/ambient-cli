@@ -87,7 +87,7 @@ async function main(): Promise<void> {
       await runGitHub(rest);
       break;
     case "doctor":
-      await runDoctor();
+      await runDoctor(rest);
       break;
     case "--version":
     case "-v":

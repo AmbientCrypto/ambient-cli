@@ -17,6 +17,13 @@ const m = (id: string): CatalogModel => ({
   isReady: true,
 });
 const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function waitFor(check: () => boolean): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error("model switch did not reach the running step");
+    await settle(20);
+  }
+}
 const stubWriter = () =>
   ({ append() {}, close() {}, path: "/dev/null" }) as unknown as SessionWriter;
 
@@ -24,13 +31,17 @@ describe("/model while a run is working", () => {
   it("switches at the next step and shows a receipt", async () => {
     const models: string[] = [];
     let call = 0;
+    let finishFirst: () => void = () => {};
+    const firstStep = new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    });
     const client = {
       fetchCatalog: async () => [m("vendor/a"), m("vendor/b")],
       chat: async (p: ChatParams) => {
         models.push(p.model);
         call += 1;
         if (call === 1) {
-          await settle(250); // a slow first step — the user switches meanwhile
+          await firstStep; // release only after the UI has accepted the switch
           return {
             content: "",
             toolCalls: [{ id: "t1", name: "list", args: { path: "." }, rawArgs: '{"path":"."}' }],
@@ -52,16 +63,24 @@ describe("/model while a run is working", () => {
         workspaceRoot={process.cwd()}
       />,
     );
-    await settle(30);
-    for (const ch of "look around") ui.stdin.write(ch);
-    ui.stdin.write("\r");
-    await settle(60);
-    for (const ch of "/model vendor/b") ui.stdin.write(ch);
-    await settle(20);
-    ui.stdin.write("\r");
-    await settle(500);
-    expect(models).toEqual(["vendor/a", "vendor/b"]);
-    expect(ui.lastFrame()).toContain("switched to vendor/b");
-    ui.unmount();
+    try {
+      await settle(30);
+      for (const ch of "look around") ui.stdin.write(ch);
+      ui.stdin.write("\r");
+      await waitFor(() => models.length === 1);
+      for (const ch of "/model vendor/b") ui.stdin.write(ch);
+      await settle(20);
+      ui.stdin.write("\r");
+      await waitFor(() =>
+        (ui.lastFrame() ?? "").includes("switching to vendor/b at the next step"),
+      );
+      finishFirst();
+      await waitFor(() => models.length === 2);
+      expect(models).toEqual(["vendor/a", "vendor/b"]);
+      await waitFor(() => (ui.lastFrame() ?? "").includes("switched to vendor/b"));
+    } finally {
+      finishFirst();
+      ui.unmount();
+    }
   });
 });

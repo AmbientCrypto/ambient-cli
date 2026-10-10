@@ -1,7 +1,13 @@
 {
   "name": "@amb/cli",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "ambient": {
+    "runtimeExternals": ["react", "ink", "undici", "cross-spawn", "yaml", "unpdf"]
+  },
   "bin": {
     "ambient": "./dist/amb.js",
     "amb": "./dist/amb.js"
@@ -25,7 +31,7 @@
     "@amb/sessions": "workspace:*",
     "@amb/tools-core": "workspace:*",
     "cross-spawn": "^7.0.6",
-    "ink": "^7.1.1",
+    "ink": "8.0.0",
     "react": "^19.3.0",
     "string-width": "^8.2.2",
     "undici": "^6.21.0",

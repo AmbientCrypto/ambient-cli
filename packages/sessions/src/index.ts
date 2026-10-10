@@ -6,3 +6,4 @@ export * from "./reader.js";
 export * from "./objects.js";
 export * from "./rewind.js";
 export * from "./recovery.js";
+export * from "./recovery-window.js";

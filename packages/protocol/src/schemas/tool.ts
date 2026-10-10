@@ -61,6 +61,8 @@ export interface ToolContext {
   cwd: string;
   workspaceRoot: string;
   signal: AbortSignal;
+  /** Interrupt only pure waits when a steering message arrives; never abort the job itself. */
+  waitSignal?: AbortSignal;
   /** Resolve a secret by opaque reference — the value never enters model context. */
   secret(ref: string): Promise<string>;
   emit(event: NewEvent): void;
@@ -96,6 +98,16 @@ export interface ToolContext {
   backgroundJobs?: BackgroundJobsPort;
   /** Work that runs beside the agent and reports back at a turn boundary. Absent ⇒ not available. */
   backgroundTasks?: BackgroundTasksPort;
+  ciWatches?: {
+    wait(
+      target: { repo: string; runId: number },
+      opts: {
+        signal: AbortSignal;
+        wakeSignal?: AbortSignal;
+        progress?: (summary: string, active: boolean) => void;
+      },
+    ): Promise<unknown>;
+  };
 }
 
 /** Hand work off to run in the background; its report reaches the agent when it's done. */
@@ -113,7 +125,21 @@ export interface BackgroundJobsPort {
     exitCode?: number | null;
     output: string;
     truncated: boolean;
+    idleReads?: number;
   };
+  wait?(
+    id: string,
+    opts: {
+      until: "output" | "exit";
+      signal: AbortSignal;
+      wakeSignal?: AbortSignal;
+      timeoutMs?: number;
+    },
+  ): Promise<
+    ReturnType<BackgroundJobsPort["read"]> & {
+      reason: "output" | "exit" | "steered" | "cancelled" | "timeout";
+    }
+  >;
   kill(id: string): boolean;
   list(): Array<{ id: string; command: string; exitCode?: number | null }>;
 }

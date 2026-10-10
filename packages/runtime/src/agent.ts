@@ -48,9 +48,13 @@ import {
 } from "@amb/reliability";
 import {
   type ToolRegistry,
+  bashOutputTool,
+  bashWaitTool,
   createBuiltinRegistry,
   machineShell,
+  sha256,
   toOpenAITools,
+  watchCiTool,
 } from "@amb/tools-core";
 import {
   SPILL_NOTE,
@@ -160,6 +164,7 @@ export class Agent {
     } finally {
       state.jobs.stopAll();
       state.tasks.stopAll();
+      state.ci.stopAll();
     }
   }
 
@@ -233,13 +238,21 @@ export class Agent {
       return { stopReason: "error", turns: 0, finalText: "" };
     }
 
-    // UserPromptSubmit hooks can stop the message or add context. They run BEFORE the turn is recorded, so a
-    // message a hook stops (say, one carrying a secret) never reaches the session log — or a later resume.
+    // Prompt hooks run before turn recording. Queued messages already have a durable receipt;
+    // mark rejected receipts as discarded so recovery cannot submit them again.
     const promptHook = opts.hooks
       ? await opts.hooks.run("UserPromptSubmit", { prompt: userInput }, opts.signal)
       : {};
     const promptStop = promptHook.halt ?? promptHook.block;
     if (promptStop) {
+      if (opts.queuedMessageIds?.length)
+        emit({
+          schemaVersion: 1,
+          kind: "steer.discarded",
+          sessionId,
+          messageIds: opts.queuedMessageIds,
+          reason: promptStop,
+        });
       emit({
         schemaVersion: 1,
         kind: "notice",
@@ -257,6 +270,7 @@ export class Agent {
       sessionId,
       turnId,
       input: userInput,
+      ...(opts.queuedMessageIds?.length ? { messageIds: opts.queuedMessageIds } : {}),
       // References only (mime/bytes/sha256/source) — the base64 bytes never enter the durable log.
       ...(opts.attachments && opts.attachments.length > 0
         ? { attachments: opts.attachments.map(toAttachmentRef) }
@@ -648,6 +662,7 @@ export class Agent {
     // Doom-loop guard: if the model issues the EXACT same tool-call batch
     // several times running with no progress, stop early with `looping` instead of burning to max_turns.
     let lastBatchSig = "";
+    let lastProgressSig = "";
     let batchRepeat = 0;
     let malformedStrikes = 0;
     let failedBatches = 0;
@@ -698,6 +713,9 @@ export class Agent {
       // steer is treated like any other recent message; each is durably logged so a resume rebuilds it. ──
       // A background command finished since the model last looked: say so, so it can read the result.
       // Background subagents that reported since the last turn: their findings, as data.
+      for (const update of runState.ci.takeUpdates()) {
+        messages.push({ role: "user", content: `[${update}]` });
+      }
       for (const task of runState.tasks.takeFinished()) {
         messages.push({
           role: "user",
@@ -710,8 +728,9 @@ export class Agent {
           content: `[Background command ${job.id} (\`${job.command.slice(0, 200)}\`) finished with exit code ${job.exitCode ?? "none (stopped)"} — read its output with bash_output({"id":"${job.id}"}).]`,
         });
       }
-      for (const steerText of opts.steer?.() ?? []) {
-        const text = steerText.trim();
+      for (const steering of opts.steer?.() ?? []) {
+        const text = (typeof steering === "string" ? steering : steering.text).trim();
+        const messageId = typeof steering === "string" ? undefined : steering.messageId;
         if (!text) continue;
         // A message sent mid-run goes through the same prompt hooks as the first one.
         const steerHook = opts.hooks
@@ -719,6 +738,14 @@ export class Agent {
           : {};
         const refused = steerHook.halt ?? steerHook.block;
         if (refused) {
+          if (messageId)
+            emit({
+              schemaVersion: 1,
+              kind: "steer.discarded",
+              sessionId,
+              messageIds: [messageId],
+              reason: refused,
+            });
           emit({
             schemaVersion: 1,
             kind: "notice",
@@ -732,7 +759,16 @@ export class Agent {
           role: "user",
           content: steerHook.context ? `${text}\n\n${steerHook.context}` : text,
         });
-        emit({ schemaVersion: 1, kind: "steer", sessionId, turnId, text });
+        emit({
+          schemaVersion: 1,
+          kind: "steer",
+          sessionId,
+          turnId,
+          text,
+          ...(messageId ? { messageId } : {}),
+        });
+        lastBatchSig = "";
+        batchRepeat = 0;
       }
 
       // ── mid-run MODEL SWITCH (/model while a run is flying): applied at this turn boundary, then everything
@@ -1444,17 +1480,6 @@ export class Agent {
         batchRepeat = 0;
         lastBatchSig = batchSig;
       }
-      if (batchRepeat + 1 >= MAX_IDENTICAL_TOOL_BATCHES) {
-        emit({
-          schemaVersion: 1,
-          kind: "error",
-          sessionId,
-          errorKind: "tool",
-          message: `stopped: the model repeated the same tool call ${MAX_IDENTICAL_TOOL_BATCHES}× with no progress (doom-loop guard)`,
-        });
-        stopReason = "looping";
-        break;
-      }
 
       // Keep the model's latest plan (re-sent on every request as a trailing note, so it survives compaction
       // and stays in view) — without rewriting the system prompt, whose byte-stable prefix Ambient caches.
@@ -1557,6 +1582,45 @@ export class Agent {
           content: assistedResults.join("\n\n"),
           toolGroupId: attemptGroup,
         });
+      }
+      // Progress includes new results, not just arguments. Never stop before pairing calls and results.
+      const activeWait =
+        outcomes.length > 0 &&
+        outcomes.every((outcome) => {
+          const tool = this.registry.get(outcome.toolName);
+          const result = outcome.result as {
+            id?: string;
+            repo?: string;
+            runId?: number;
+            running?: boolean;
+            reason?: string;
+          } | null;
+          if (!outcome.ok || result?.running !== true || result.reason === undefined) return false;
+          if (tool === watchCiTool && result.repo && result.runId)
+            return runState.ci.isActive({ repo: result.repo, runId: result.runId });
+          return (
+            (tool === bashWaitTool || tool === bashOutputTool) &&
+            runState.jobs.list().some((job) => job.id === result.id && job.exitCode === undefined)
+          );
+        });
+      const resultSig = sha256(
+        outcomes
+          .map((outcome) => sameArgsKey(outcome.ok ? outcome.result : outcome.error, ""))
+          .join("|"),
+      );
+      const progressSig = `${batchSig}:${resultSig}`;
+      if (activeWait || progressSig !== lastProgressSig) batchRepeat = 0;
+      lastProgressSig = progressSig;
+      if (!activeWait && batchRepeat + 1 >= MAX_IDENTICAL_TOOL_BATCHES) {
+        emit({
+          schemaVersion: 1,
+          kind: "error",
+          sessionId,
+          errorKind: "tool",
+          message: `stopped: the model repeated the same tool call ${MAX_IDENTICAL_TOOL_BATCHES}× with no progress (doom-loop guard)`,
+        });
+        stopReason = "looping";
+        break;
       }
       // Images the agent looked at (view_image) go to the model with the next call.
       if (viewed.length > 0) {

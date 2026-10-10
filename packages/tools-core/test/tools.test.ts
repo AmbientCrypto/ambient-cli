@@ -286,12 +286,13 @@ describe("BoundedCapture (error-biased truncation)", () => {
 describe("registry + openai schema", () => {
   it("registers all builtins and exposes read-only names", () => {
     const reg = createBuiltinRegistry();
-    expect(reg.list()).toHaveLength(21);
+    expect(reg.list()).toHaveLength(23);
     // `plan`/`skill`/`search_skills` are read-only too (UI/reference lookups — never touch the filesystem).
     // `web_fetch`/`web_search` are NOT read-only (network); `remember` WRITES a file so it's gated too.
     // `ask_user` + `propose_goal_update` have NO effects (human interactions) so they aren't read-only either.
     expect(reg.readOnlyNames().sort()).toEqual([
       "bash_output",
+      "bash_wait",
       "glob",
       "grep",
       "list",

@@ -174,6 +174,8 @@ export type Approver = (req: {
 export type AskPort = (req: AskRequest) => Promise<AskResponse>;
 
 export interface RunOptions {
+  /** IDs of durable queued messages delivered by this run's initial input. */
+  queuedMessageIds?: string[];
   /** Unique per-run session id (the CLI mints one; the writer chains from seq 0). */
   sessionId: string;
   mode: Mode;
@@ -199,7 +201,9 @@ export interface RunOptions {
   /** Optional mid-run STEER port. The agent calls it at each turn boundary; any strings it returns are
    *  injected as new user messages into the RUNNING conversation — the user redirecting the agent without
    *  cancelling. Absent ⇒ no steering. Each call consumes what it returns (the port drains its own queue). */
-  steer?: () => string[];
+  steer?: () => Array<string | { text: string; messageId: string }>;
+  /** Latest wait-only signal; the UI rotates it after draining accepted steering. */
+  waitSignal?: () => AbortSignal;
   /** Session-scoped permission grants (mutated in place as the user picks "allow for this session"). Pass a
    *  STABLE array across turns so an allow-session grant actually persists — the TUI holds one per session.
    *  Absent ⇒ a fresh per-run array (grants last one run only). */

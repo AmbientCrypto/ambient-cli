@@ -1,3 +1,4 @@
+const CHECKPOINT_CHARS = 262_144;
 import {
   buildSummaryRequest,
   chunkForSummary,
@@ -145,6 +146,7 @@ export async function compact(
     sessionId,
     turnId,
     keptTokens: after,
+    summary: String(summaryMsg.content).slice(0, CHECKPOINT_CHARS),
     summarizedPhases: plan.toSummarize.length,
   });
   return next;
@@ -270,6 +272,7 @@ export function spillToArtifact(
     turnId,
     keptTokens: estimateMessagesTokens(next),
     summarizedPhases: spill.evictedCount,
+    summary: String(breadcrumb.content).slice(0, CHECKPOINT_CHARS),
   });
   return next;
 }

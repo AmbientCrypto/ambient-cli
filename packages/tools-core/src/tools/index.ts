@@ -2,7 +2,7 @@ import type { ToolDefinition } from "@amb/protocol";
 import { ToolRegistry } from "../registry.js";
 import { applyPatchTool } from "./apply-patch.js";
 import { askUserTool } from "./ask-user.js";
-import { bashOutputTool, killShellTool } from "./background-tools.js";
+import { bashOutputTool, bashWaitTool, killShellTool } from "./background-tools.js";
 import { bashTool } from "./bash.js";
 import { diagnosticsTool } from "./diagnostics.js";
 import { editTool } from "./edit.js";
@@ -17,6 +17,7 @@ import { readTool } from "./read.js";
 import { rememberTool } from "./remember.js";
 import { searchSkillsTool } from "./search-skills.js";
 import { skillTool } from "./skill.js";
+import { watchCiTool } from "./watch-ci.js";
 import { makeWebFetchTool, webFetchTool } from "./web-fetch.js";
 import { makeWebSearchTool, webSearchTool } from "./web-search.js";
 import { writeTool } from "./write.js";
@@ -34,6 +35,8 @@ export {
   diagnosticsTool,
   bashTool,
   bashOutputTool,
+  bashWaitTool,
+  watchCiTool,
   killShellTool,
   planTool,
   skillTool,
@@ -61,6 +64,8 @@ export const builtinTools: ToolDefinition[] = [
   diagnosticsTool,
   bashTool,
   bashOutputTool,
+  bashWaitTool,
+  watchCiTool,
   killShellTool,
   planTool,
   skillTool,

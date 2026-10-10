@@ -141,3 +141,15 @@ describe("installKind / updateCommand", () => {
     expect(updateCommand("source")).toContain("./scripts/install.sh");
   });
 });
+
+it("distinguishes npm globals under Homebrew from the Homebrew formula", () => {
+  expect(installKind("/opt/homebrew/lib/node_modules/ambient-code/dist/amb.js")).toBe("npm");
+  expect(
+    installKind("/opt/homebrew/Cellar/node/26/lib/node_modules/ambient-code/dist/amb.js"),
+  ).toBe("npm");
+  expect(
+    installKind(
+      "/opt/homebrew/Cellar/ambient-code/1.0.4/libexec/lib/node_modules/ambient-code/dist/amb.js",
+    ),
+  ).toBe("brew");
+});

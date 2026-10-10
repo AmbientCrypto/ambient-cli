@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertSafeSessionId, sessionsDir } from "./paths.js";
 
@@ -63,10 +63,13 @@ export function readObject(
   sessionId: string,
   hashKey: string,
   env?: Record<string, string | undefined>,
+  maxBytes = Number.POSITIVE_INFINITY,
 ): string | undefined {
   let content: string;
   try {
-    content = readFileSync(blobFile(objectsDir(sessionId, env), hashKey), "utf8");
+    const file = blobFile(objectsDir(sessionId, env), hashKey);
+    if (statSync(file).size > maxBytes) return undefined;
+    content = readFileSync(file, "utf8");
   } catch {
     return undefined;
   }

@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { type HistoryNav, IDLE_NAV, navNewer, navOlder, searchHistory } from "./history.js";
+import { boundPrompts } from "./view-retention.js";
 
 /** Persistence for prompt history, supplied by the CLI edge (the App never touches the filesystem). */
 export interface HistoryPort {
@@ -28,7 +29,7 @@ export function usePromptHistory(port: HistoryPort | undefined) {
   const entries = useCallback((): string[] => {
     if (entriesRef.current === undefined) {
       try {
-        entriesRef.current = port?.load() ?? [];
+        entriesRef.current = boundPrompts(port?.load() ?? []);
       } catch {
         entriesRef.current = [];
       }
@@ -47,7 +48,7 @@ export function usePromptHistory(port: HistoryPort | undefined) {
       const trimmed = text.trim();
       if (!trimmed) return;
       const list = entries();
-      if (list[list.length - 1] !== trimmed) entriesRef.current = [...list, trimmed];
+      if (list[list.length - 1] !== trimmed) entriesRef.current = boundPrompts([...list, trimmed]);
       port?.append(trimmed);
     },
     [entries, port],

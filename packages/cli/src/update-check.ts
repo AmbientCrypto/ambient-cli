@@ -2,7 +2,7 @@
 // CLI and never throws: on any failure (offline, rate-limited, timeout) it silently returns null. The result
 // is cached so at most one network call happens per CACHE_TTL_MS. The only thing fetched is a version STRING
 // (the latest release tag), which is compared as semver and shown to the user — never executed.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { CURRENT_VERSION } from "./version.js";
@@ -39,9 +39,9 @@ interface Cache {
   latest: string;
 }
 
-function cacheFile(cacheDir?: string): string {
+function cacheFile(cacheDir?: string, kind: InstallKind = installKind()): string {
   const base = cacheDir ?? process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache");
-  return join(base, "amb", "update-check.json");
+  return join(base, "amb", kind === "source" ? "update-check.json" : `update-check-${kind}.json`);
 }
 
 function readCache(path: string): Cache | undefined {
@@ -64,15 +64,33 @@ function writeCache(path: string, c: Cache): void {
 }
 
 /** Fetch the latest published version tag from GitHub releases. Best-effort: null on any failure/timeout. */
-export async function fetchLatestVersion(signal?: AbortSignal): Promise<string | null> {
+export async function fetchLatestVersion(
+  signal?: AbortSignal,
+  kind: InstallKind = installKind(),
+): Promise<string | null> {
   try {
-    const res = await fetch(LATEST_URL, {
+    const url =
+      kind === "npm"
+        ? "https://registry.npmjs.org/ambient-code/latest"
+        : kind === "brew"
+          ? "https://raw.githubusercontent.com/AmbientCrypto/homebrew-ambient/main/Formula/ambient-code.rb"
+          : LATEST_URL;
+    const res = await fetch(url, {
       headers: { "User-Agent": "ambient-cli", Accept: "application/vnd.github+json" },
       ...(signal ? { signal } : {}),
     });
     if (!res.ok) return null;
-    const body = (await res.json()) as { tag_name?: unknown };
-    return typeof body.tag_name === "string" ? body.tag_name.replace(/^v/, "") : null;
+    if (kind === "brew") {
+      const formula = await res.text();
+      return (
+        /version\s+"(\d+\.\d+\.\d+)"/.exec(formula)?.[1] ??
+        /releases\/download\/v(\d+\.\d+\.\d+)\//.exec(formula)?.[1] ??
+        null
+      );
+    }
+    const body = (await res.json()) as { tag_name?: unknown; version?: unknown };
+    const version = kind === "npm" ? body.version : body.tag_name;
+    return typeof version === "string" ? version.replace(/^v/, "") : null;
   } catch {
     return null;
   }
@@ -127,9 +145,16 @@ export async function checkForUpdate(deps: UpdateCheckDeps = {}): Promise<Update
  *  (the Windows and Linux install path); anything else is a source / dev build. */
 export type InstallKind = "brew" | "npm" | "source";
 export function installKind(execPath: string = process.argv[1] ?? ""): InstallKind {
-  const p = execPath.replace(/\\/g, "/");
-  if (/\/(Cellar|homebrew|linuxbrew)\//.test(p)) return "brew";
+  let actual = execPath;
+  try {
+    actual = realpathSync(execPath);
+  } catch {
+    /* Nonexistent paths are still useful in diagnostics/tests. */
+  }
+  const p = actual.replace(/\\/g, "/");
+  if (/\/(Cellar|opt)\/ambient-code\//.test(p)) return "brew";
   if (/\/node_modules\/ambient-code\//.test(p)) return "npm";
+  if (/\/(homebrew|\.linuxbrew|linuxbrew)\/bin\/(amb|ambient)$/.test(p)) return "brew";
   return "source";
 }
 

@@ -1,7 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { type Event, EventSchema } from "@amb/protocol";
 import { eventChecksum } from "./checksum.js";
+import { journalLines } from "./journal-lines.js";
 import { sessionPath } from "./paths.js";
+import { RecoveryWindow } from "./recovery-window.js";
 
 export interface ReadResult {
   events: Event[];
@@ -11,6 +13,7 @@ export interface ReadResult {
   chainIntact: boolean;
   /** True if any INTERIOR (non-final) line failed to parse — a corrupted middle, not just a torn tail. */
   interiorCorruption: boolean;
+  error?: string;
 }
 
 /**
@@ -21,39 +24,66 @@ export interface ReadResult {
 export function readSession(
   sessionId: string,
   env?: Record<string, string | undefined>,
+  limits?: { maxEvents?: number; maxBytes?: number },
 ): ReadResult {
   const path = sessionPath(sessionId, env);
   if (!existsSync(path))
     return { events: [], droppedTail: 0, chainIntact: true, interiorCorruption: false };
-  const lines = readFileSync(path, "utf8")
-    .split("\n")
-    .filter((l) => l.trim().length > 0);
-
   const events: Event[] = [];
+  const window = limits ? new RecoveryWindow(limits) : undefined;
   let droppedTail = 0;
   let interiorCorruption = false;
-  lines.forEach((line, idx) => {
-    try {
-      events.push(EventSchema.parse(JSON.parse(line)));
-    } catch {
-      if (idx === lines.length - 1) droppedTail += 1;
-      else interiorCorruption = true;
-    }
-  });
-
-  let chainIntact = !interiorCorruption;
+  let chainIntact = true;
   let prev: string | undefined;
   let expectedSeq = 0;
-  for (const ev of events) {
-    if (ev.prevChecksum !== prev) chainIntact = false;
-    if (ev.seq !== expectedSeq) chainIntact = false;
-    const { checksum, ...rest } = ev;
-    if (checksum !== eventChecksum(rest as Omit<Event, "checksum">)) chainIntact = false;
-    prev = ev.checksum;
-    expectedSeq += 1;
+  try {
+    for (const line of journalLines(path)) {
+      if (droppedTail) {
+        interiorCorruption = true;
+        droppedTail = 0;
+      }
+      let ev: Event;
+      try {
+        ev = EventSchema.parse(JSON.parse(line));
+      } catch {
+        droppedTail = 1;
+        continue;
+      }
+      if (ev.prevChecksum !== prev || ev.seq !== expectedSeq) chainIntact = false;
+      const { checksum, ...rest } = ev;
+      if (checksum !== eventChecksum(rest as Omit<Event, "checksum">)) chainIntact = false;
+      prev = ev.checksum;
+      expectedSeq += 1;
+      if (window) window.add(ev, Buffer.byteLength(line));
+      else events.push(ev);
+    }
+  } catch (error) {
+    return {
+      events: [],
+      droppedTail,
+      chainIntact: false,
+      interiorCorruption: true,
+      error: (error as Error).message,
+    };
   }
+  return {
+    events: window?.events() ?? events,
+    droppedTail,
+    chainIntact: chainIntact && !interiorCorruption,
+    interiorCorruption,
+  };
+}
 
-  return { events, droppedTail, chainIntact, interiorCorruption };
+/** Accepted but not delivered/discarded messages; old logs simply have no receipts. */
+export function pendingMessages(events: Event[]): Array<Extract<Event, { kind: "steer.queued" }>> {
+  const pending = new Map<string, Extract<Event, { kind: "steer.queued" }>>();
+  for (const event of events) {
+    if (event.kind === "steer.queued") pending.set(event.messageId, event);
+    if (event.kind === "steer" && event.messageId) pending.delete(event.messageId);
+    if (event.kind === "turn.started") for (const id of event.messageIds ?? []) pending.delete(id);
+    if (event.kind === "steer.discarded") for (const id of event.messageIds) pending.delete(id);
+  }
+  return [...pending.values()];
 }
 
 /** Reconstruct the plain assistant/tool transcript text from a session's durable events. */

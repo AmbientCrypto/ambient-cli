@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { readSession, sessionsDir, turnCount } from "@amb/sessions";
+import { RECOVERY_LIMITS, readSession, sessionsDir, turnCount } from "@amb/sessions";
 
 /**
  * Resolve a session id from a user argument. `"latest"` (or empty) picks the most-recently-modified session
@@ -19,7 +19,7 @@ export function resolveSessionId(
     .sort((a, b) => b.mtime - a.mtime);
   if (idOrLatest && idOrLatest !== "latest") return files.find((f) => f.id === idOrLatest)?.id;
   for (const f of files) {
-    const { events } = readSession(f.id);
+    const { events } = readSession(f.id, undefined, RECOVERY_LIMITS);
     if (turnCount(events) === 0) continue;
     // `--continue` wants the latest conversation in THIS folder, not the latest anywhere.
     if (opts.workspaceRoot) {

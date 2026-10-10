@@ -23,6 +23,7 @@ import {
 } from "@amb/protocol";
 import {
   BackgroundJobs,
+  CiWatches,
   type ToolRegistry,
   isPosixShell,
   machineShell,
@@ -455,6 +456,7 @@ export async function executeTools(
     cwd: opts.cwd,
     workspaceRoot: opts.workspaceRoot,
     signal: opts.signal,
+    ...(opts.waitSignal ? { waitSignal: opts.waitSignal() } : {}),
     secret: async () => "",
     emit: opts.emit,
     ...(opts.checkpoint ? { checkpoint: opts.checkpoint } : {}),
@@ -471,7 +473,9 @@ export async function executeTools(
       ? { readRoots: { list: () => [...readRoots], add: (dir: string) => void readRoots.add(dir) } }
       : {}),
     ...(readDenied ? { readDenied } : {}),
-    ...(runState ? { backgroundJobs: runState.jobs, backgroundTasks: runState.tasks } : {}),
+    ...(runState
+      ? { backgroundJobs: runState.jobs, backgroundTasks: runState.tasks, ciWatches: runState.ci }
+      : {}),
   });
 
   const ids = calls.map((c) => (c.id.startsWith("tc_") ? c.id : newToolCallId()));
@@ -653,6 +657,7 @@ const NOT_OURS = new Set([
 export interface RunState {
   /** Background shell commands (`bash` with `background: true`). */
   jobs: BackgroundJobs;
+  ci: CiWatches;
   /** Background subagent waves, reporting back at a turn boundary. */
   tasks: BackgroundTasks;
   /** Folders outside the workspace tools may read (a loaded skill's own files). */
@@ -664,6 +669,7 @@ export interface RunState {
 export function newRunState(): RunState {
   return {
     jobs: new BackgroundJobs(),
+    ci: new CiWatches(),
     tasks: new BackgroundTasks(),
     readRoots: new Set(),
     instructionDirs: new Set(),

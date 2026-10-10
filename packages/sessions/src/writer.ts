@@ -12,6 +12,7 @@ const TRANSIENT = new Set<Event["kind"]>([
   "reasoning.delta",
   "subagent.delta",
   "tool.drafting",
+  "ci.progress",
 ]);
 
 /**
