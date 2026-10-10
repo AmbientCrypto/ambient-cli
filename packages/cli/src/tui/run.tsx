@@ -38,6 +38,7 @@ import { App } from "./App.js";
 import { installAsciiFallback, needsAsciiFallback } from "./ascii-console.js";
 import { FrameAcks } from "./frame-acks.js";
 import { appendHistory, historyPath, loadHistory } from "./history.js";
+import { SessionLifecycle } from "./session-lifecycle.js";
 import { checkStartupKey } from "./startup-key.js";
 import type { AgentMode, Effort, Permission } from "./state.js";
 import type { AccountPort } from "./use-key-prompt.js";
@@ -141,15 +142,30 @@ export async function runTui(opts: TuiOptions): Promise<void> {
     ),
   };
   const cwd = process.cwd();
+  const lifecycle = new SessionLifecycle();
   const previous = opts.initialTask
     ? undefined
     : loadResumeContext("latest", { workspaceRoot: cwd });
-  const recovery =
-    previous && !("error" in previous) && previous.interrupted ? previous : undefined;
-  const recoveryError =
+  let recovery = previous && !("error" in previous) && previous.interrupted ? previous : undefined;
+  let recoveryError =
     previous && "error" in previous && !previous.error.startsWith("no earlier")
       ? previous.error
       : undefined;
+  try {
+    if (recovery && lifecycle.dismissed(recovery)) recovery = undefined;
+  } catch (error) {
+    recoveryError = `Couldn't read saved recovery choice: ${(error as Error).message}`;
+  }
+  const closeSession = (reason: "quit" | "signal"): void => {
+    try {
+      lifecycle.close(reason);
+      if (recovery) lifecycle.dismiss(recovery);
+    } catch (error) {
+      process.stderr.write(
+        `Ambient couldn't record a clean shutdown: ${(error as Error).message}\n`,
+      );
+    }
+  };
   // Fetch the fleet and the update check together so neither adds latency to the splash. The update check is
   // cached (at most one network call per 6h) and fully best-effort — it never blocks or fails the launch.
   const [fleet, updateInfo] = await Promise.all([
@@ -217,6 +233,7 @@ export async function runTui(opts: TuiOptions): Promise<void> {
   // so the MCP servers must be shut down HERE (idempotent), else their child processes leak on a signal exit.
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     process.once(sig, () => {
+      closeSession("signal");
       mcp.close();
       restore();
       // Everything else that cleans up on `exit` (background commands and subagents, the glyph fallback)
@@ -240,11 +257,20 @@ export async function runTui(opts: TuiOptions): Promise<void> {
     createElement(App, {
       client,
       afterRender: frames.afterRender,
-      ...(recovery ? { recovery } : {}),
+      ...(recovery
+        ? {
+            recovery,
+            onDismissRecovery: () => {
+              if (recovery) lifecycle.dismiss(recovery);
+            },
+          }
+        : {}),
       ...(recoveryError ? { recoveryError } : {}),
       makeWriter: (sessionId: string) => {
         currentSession = sessionId;
-        return new SessionWriter(sessionId, () => new Date().toISOString());
+        const writer = new SessionWriter(sessionId, () => new Date().toISOString());
+        lifecycle.attach(writer, sessionId);
+        return writer;
       },
       settings,
       memory: makeMemoryPort(cwd, ambHome()),
@@ -293,6 +319,7 @@ export async function runTui(opts: TuiOptions): Promise<void> {
 
   try {
     await instance.waitUntilExit();
+    closeSession("quit");
   } finally {
     await fireAndForget(
       settings.hooksPort(() => currentSession),

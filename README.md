@@ -213,9 +213,10 @@ machine.
 ## Architecture
 
 Long sessions keep a bounded live transcript; printed history belongs to your terminal scrollback and the
-durable session journal. On startup, an interrupted session in this folder is offered for recovery. Enter
-restores its task, plan, checkpoint and undelivered messages; Escape dismisses the offer. Recovery does not
-execute until accepted, and interrupted writes are reconciled before the agent continues.
+durable session journal. After an abnormal interruption, startup offers to restore this folder's session.
+Ctrl+Y confirms restoration of its task, plan, checkpoint and undelivered messages. Enter, Escape or typing
+starts fresh. Normal quits and terminal closes do not trigger recovery, and a declined offer stays dismissed.
+Recovery executes only after explicit confirmation, and interrupted writes are reconciled before continuing.
 
 While a task runs, Enter queues and saves your message, then wakes a waiting tool at a safe boundary.
 For long commands, the agent uses `bash` with `background: true` followed by `bash_wait` instead of repeatedly

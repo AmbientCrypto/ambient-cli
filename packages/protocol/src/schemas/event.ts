@@ -82,6 +82,7 @@ export const EventSchema = z.discriminatedUnion("kind", [
   }),
   sev("session.branched", { fromSessionId: z.string(), atSeq: z.number().int().nonnegative() }),
   sev("session.paused", { reason: z.string() }),
+  sev("session.closed", { reason: z.enum(["quit", "signal"]) }),
   sev("steer.queued", {
     messageId: z.string().min(1),
     text: z.string(),

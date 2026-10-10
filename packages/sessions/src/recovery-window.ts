@@ -26,6 +26,7 @@ export class RecoveryWindow {
       if (event.plan) this.keep("plan", event, bytes);
     }
     if (event.kind === "session.started") this.keep("session", event, bytes);
+    if (event.kind === "session.closed") this.keep("closed", event, bytes);
     if (event.kind === "goal.set") this.keep("goal", event, bytes);
     if (event.kind === "turn.started") {
       this.keep("task", event, bytes);

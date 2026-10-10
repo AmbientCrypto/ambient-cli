@@ -46,6 +46,53 @@ function session(root: string, input: string, age: number, goal?: string): strin
 }
 
 describe("continuing a session", () => {
+  it("does not mistake a finished error or budget stop for a process crash", () => {
+    const id = newSessionId();
+    const writer = new SessionWriter(id, () => new Date().toISOString());
+    const turnId = newTurnId();
+    writer.append({
+      schemaVersion: 1,
+      kind: "session.started",
+      sessionId: id,
+      cwd: "/work/app",
+      workspaceRoot: "/work/app",
+    });
+    writer.append({ schemaVersion: 1, kind: "turn.started", sessionId: id, turnId, input: "task" });
+    writer.append({
+      schemaVersion: 1,
+      kind: "turn.finished",
+      sessionId: id,
+      turnId,
+      stopReason: "error",
+    });
+    const recovered = loadResumeContext(id);
+    if ("error" in recovered) throw new Error(recovered.error);
+    expect(recovered.interrupted).toBe(false);
+  });
+
+  it("does not offer recovery after a deliberate close during an unfinished turn", () => {
+    const id = newSessionId();
+    const writer = new SessionWriter(id, () => new Date().toISOString());
+    writer.append({
+      schemaVersion: 1,
+      kind: "session.started",
+      sessionId: id,
+      cwd: "/work/app",
+      workspaceRoot: "/work/app",
+    });
+    writer.append({
+      schemaVersion: 1,
+      kind: "turn.started",
+      sessionId: id,
+      turnId: newTurnId(),
+      input: "task",
+    });
+    writer.append({ schemaVersion: 1, kind: "session.closed", sessionId: id, reason: "signal" });
+    const recovered = loadResumeContext(id);
+    if ("error" in recovered) throw new Error(recovered.error);
+    expect(recovered.interrupted).toBe(false);
+    expect(recovered.context).toContain("task");
+  });
   it("--continue takes the latest conversation in this folder; latest alone takes the newest anywhere", () => {
     const mine = session("/work/app", "add the login page", 300, "ship login");
     session("/work/other", "unrelated", 10);

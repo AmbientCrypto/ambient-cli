@@ -217,6 +217,7 @@ export interface AppDeps {
   afterRender?: (callback: () => void) => () => void;
   recovery?: ResumeContext;
   recoveryError?: string;
+  onDismissRecovery?: () => void;
 }
 
 type Action =
@@ -1878,6 +1879,20 @@ export function App(deps: AppDeps): ReactNode {
     return matches;
   };
 
+  const dismissRecoveryOffer = (): void => {
+    recoveryOpenRef.current = false;
+    setRecoveryOpen(false);
+    try {
+      deps.onDismissRecovery?.();
+    } catch (error) {
+      dispatch({
+        t: "notice",
+        level: "warn",
+        text: `Couldn't save recovery choice: ${(error as Error).message}`,
+      });
+    }
+  };
+
   useInput((ch, rawKey) => {
     const key = {
       ...rawKey,
@@ -1886,11 +1901,14 @@ export function App(deps: AppDeps): ReactNode {
     // 0) The key panel owns the keyboard while open (Ctrl+C still quits).
     if (!(key.ctrl && ch === "c") && keyFlow.handleInput(ch, key)) return;
     if (recoveryOpenRef.current && !(key.ctrl && ch === "c")) {
-      if (key.escape || key.return) {
+      const restoreConfirmed = key.ctrl && ch === "y";
+      if (key.escape) dismissRecoveryOffer();
+      if (key.return) {
+        dismissRecoveryOffer();
+      }
+      if (restoreConfirmed && deps.recovery) {
         recoveryOpenRef.current = false;
         setRecoveryOpen(false);
-      }
-      if (key.return && deps.recovery) {
         const recovered = deps.recovery;
         recoveryRef.current = recovered;
         planRef.current = recovered.plan;
@@ -1901,7 +1919,9 @@ export function App(deps: AppDeps): ReactNode {
           `Continue the interrupted task: ${recovered.task?.slice(0, 64_000) ?? "follow the saved plan"}. Reconcile interrupted work before proceeding.`,
         );
       }
-      return;
+      if (key.escape || key.return || !ch || key.ctrl || key.meta || ch.startsWith("\x1b")) return;
+      // Starting a new task dismisses the offer; pass the same keystroke to the composer below.
+      dismissRecoveryOffer();
     }
     // 1) A pending approval takes precedence. Two equal paths to the SAME four outcomes (resolveApprovalKey):
     //    move the ▸ cursor with ↑/↓ and confirm with Enter/Space, OR press the y/a/b/n hotkey to jump-and-confirm.
@@ -2578,9 +2598,9 @@ export function App(deps: AppDeps): ReactNode {
         {recoveryOpen ? (
           <Box flexDirection="column" flexShrink={0}>
             <Text wrap="truncate-end">
-              Resume interrupted session · {deps.recovery?.task?.slice(0, 80)}
+              Restore the previous interrupted session? · {deps.recovery?.task?.slice(0, 80)}
             </Text>
-            <Text dimColor>enter resumes · esc starts fresh</Text>
+            <Text dimColor>ctrl+y restores · enter, esc or typing starts fresh</Text>
           </Box>
         ) : null}
         {state.ciStatus ? (

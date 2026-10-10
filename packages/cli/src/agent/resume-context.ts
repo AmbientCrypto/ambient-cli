@@ -128,13 +128,13 @@ export function loadResumeContext(
   }
   const lastFinished = events.findLast((event) => event.kind === "turn.finished");
   const lastStarted = events.findLast((event) => event.kind === "turn.started");
+  const lastClosed = events.findLast((event) => event.kind === "session.closed");
+  const deliberatelyClosed = !!lastClosed && lastClosed.seq > (lastStarted?.seq ?? -1);
   const interrupted =
-    pending.length > 0 ||
-    notes.length > 0 ||
-    (!!lastStarted &&
-      (!lastFinished ||
-        lastFinished.seq < lastStarted.seq ||
-        !["complete", "cancelled", "stopped_by_hook"].includes(lastFinished.stopReason)));
+    !deliberatelyClosed &&
+    (pending.length > 0 ||
+      notes.length > 0 ||
+      (!!lastStarted && (!lastFinished || lastFinished.seq < lastStarted.seq)));
   return {
     interrupted,
     plan: latestPlan(events),

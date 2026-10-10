@@ -3,7 +3,7 @@ class AmbientCode < Formula
   homepage "https://github.com/AmbientCrypto/ambient-cli"
   url "https://github.com/AmbientCrypto/ambient-cli/releases/download/v1.0.4/ambient-code-1.0.4.tgz"
   version "1.0.4"
-  sha256 "3b39e5bb95267f8da3e7b8087cc4e2820a3050c3c917c10d3ac4523f45a0d38f"
+  sha256 "1ddca384c85a29b4efa6cc077749ef74b4e0c7c8edc2613156a613c1a344568b"
   license "MIT"
 
   depends_on "node"
