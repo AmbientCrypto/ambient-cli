@@ -3,29 +3,36 @@ import { createBuiltinRegistry } from "@amb/tools-core";
 import { githubStatus, githubSummary } from "../agent/github.js";
 import { resolveWorkingApiKey } from "../agent/working-key.js";
 import { loadConfig } from "../config.js";
+import { installationHealth } from "../installation-health.js";
 import { bold, dim } from "../render/color.js";
 import { KEY_SOURCE_LABEL, maskKey, resolveApiKeyWithSource } from "../secrets.js";
 import { checkForUpdate, updateHint } from "../update-check.js";
 import { CURRENT_VERSION } from "../version.js";
 
 /** `ambient doctor` — self-diagnostic: node version, config, key presence, live catalog reachability. */
-export async function runDoctor(): Promise<void> {
+export async function runDoctor(args: string[] = []): Promise<void> {
   const ok = (s: string) => process.stdout.write(`  ✓ ${s}\n`);
   const warn = (s: string) => process.stdout.write(`  ! ${s}\n`);
   process.stdout.write(`${bold("ambient doctor")}\n\n`);
 
   // Version + a best-effort "newer available" check (cached, never blocks — offline just shows the version).
   // Honor the same opt-out as everywhere else: config `checkUpdates: false` (and env / CI, inside checkForUpdate).
-  const upd = await checkForUpdate({ enabled: loadConfig().checkUpdates });
+  const offline = args.includes("--offline");
+  const upd = offline ? null : await checkForUpdate({ enabled: loadConfig().checkUpdates });
   if (upd?.updateAvailable) warn(updateHint(upd));
   else ok(`ambient ${CURRENT_VERSION}${upd ? " (up to date)" : ""}`);
 
   ok(`node ${process.version}`);
+  const health = installationHealth();
+  for (const line of health.lines) ok(line);
+  for (const error of health.errors) warn(error);
+  if (health.errors.length) process.exitCode = 1;
 
   const builtins = createBuiltinRegistry().list();
   ok(
     `${builtins.length} built-in tools + subagent (plus your MCP servers) — see /tools in the TUI`,
   );
+  if (offline) return;
 
   let baseUrl = "";
   try {

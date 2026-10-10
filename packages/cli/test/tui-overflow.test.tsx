@@ -8,10 +8,8 @@ import type { WaveState } from "../src/tui/state.js";
 // which bypasses the real terminal writer. So this suite drives Ink's REAL `render` against a fake TTY stdout
 // and inspects the raw escape sequences. It guards the one invariant that keeps long sessions sane:
 //
-//   Ink writes `\x1b[3J` (erase scrollback) whenever the dynamic frame overflows the viewport. The TUI wraps
-//   its whole dynamic tree in a `maxHeight={rows-1}` + `overflowY:"hidden"` clamp so Ink measures the frame as
-//   the CLAMPED height and never full-clears. This test proves the clamp actually prevents the erase (and that
-//   an UNCLAMPED tree of the same content still triggers it — i.e. the test can fail).
+//   Ink 8 preserves primary-screen scrollback even when dynamic content exceeds the viewport. The App's
+//   clamp additionally keeps the composer visible. Assert both behaviors against the real terminal writer.
 
 const ROWS = 20;
 const COLS = 80;
@@ -116,7 +114,7 @@ afterEach(() => {
 });
 
 describe("interactive overflow (real Ink render, fake TTY) — the clamp never erases scrollback", () => {
-  it("an UNCLAMPED tree taller than the viewport DOES erase scrollback (proves the test can fail)", async () => {
+  it("Ink 8 preserves primary-screen scrollback even for an overflowing tree", async () => {
     const { writes, stdout, stdin } = fakeTty();
     const { rerender, unmount } = render(<Unclamped n={ROWS * 3} />, {
       // biome-ignore lint/suspicious/noExplicitAny: minimal fake TTY streams
@@ -130,7 +128,9 @@ describe("interactive overflow (real Ink render, fake TTY) — the clamp never e
     await settle(50);
     const frame = writes.join("");
     unmount();
-    expect(frame).toContain(CLEAR_SCROLLBACK);
+    expect(frame).not.toContain(CLEAR_SCROLLBACK);
+    expect(frame).toContain("line-60");
+    expect(frame).toContain("COMPOSER");
   });
 
   it("the CLAMPED tree of the same height does NOT erase scrollback, and keeps the tail + composer + status", async () => {

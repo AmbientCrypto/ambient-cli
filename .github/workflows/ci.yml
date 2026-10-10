@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        node: [20, 22]
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
 
@@ -49,10 +49,4 @@ jobs:
         shell: bash
         run: |
           bash scripts/pack.sh
-          npm install -g ./dist-pack/ambient-code-*.tgz
-          ambient --version
-          # doctor exits 1 when Ambient can't be reached (a runner's network), so its exit code alone can't
-          # gate — but it must have started and loaded the bundled tools.
-          ambient doctor > doctor.txt 2>&1 || true
-          cat doctor.txt
-          grep -qE "[1-9][0-9]* built-in tools" doctor.txt
+          node scripts/verify-install.mjs

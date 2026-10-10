@@ -221,6 +221,9 @@ export type { PlanTask }; // the shared type lives in @amb/sessions (one parser 
 
 export interface ViewState {
   transcript: TranscriptItem[];
+  /** Incremented only after a printed prefix is released; remounts Static without clearing scrollback. */
+  scrollbackEpoch?: number;
+  ciStatus?: string;
   status: Status;
   /** The agent's task list (from the `plan` tool) — empty until/unless the model uses it. */
   plan: PlanTask[];
@@ -981,6 +984,8 @@ export function reduce(state: ViewState, ev: NewEvent, now = 0): ViewState {
 
     case "notice":
       return pushItem(state, (id) => ({ kind: "notice", id, level: ev.level, text: ev.text }));
+    case "ci.progress":
+      return { ...state, ciStatus: ev.summary.slice(0, 500) };
 
     case "context.overflow":
       return pushItem(state, (id) => ({

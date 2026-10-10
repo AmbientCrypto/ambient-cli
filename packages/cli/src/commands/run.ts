@@ -35,6 +35,7 @@ import { makeMcpAuth } from "../mcp-auth/auth-port.js";
 import { bold, dim } from "../render/color.js";
 import { KEY_REJECTED, NOT_SIGNED_IN, resolveApiKey } from "../secrets.js";
 import { attachImageFile, downscaleForWindow } from "../tui/capture.js";
+import { acceptQueuedMessage } from "../tui/queued-messages.js";
 import { checkForUpdate, updateHint } from "../update-check.js";
 import { signInInteractive } from "./login.js";
 import { type RunArgs, USAGE, parseRunArgs } from "./run-args.js";
@@ -252,8 +253,14 @@ export async function runAgent(args: string[]): Promise<void> {
       schemaVersion: 1,
       kind: "session.resumed",
       sessionId,
+      fromSessionId: resumed.fromSessionId,
+      context: resumed.context,
+      plan: { tasks: resumed.plan },
       ...(resumed.priorLastEventId ? { fromEventId: resumed.priorLastEventId } : {}),
     });
+    for (const message of resumed.pendingMessages) {
+      acceptQueuedMessage(writer, sessionId, message.text, message.attachments, message.messageId);
+    }
     if (live) {
       process.stderr.write(dim(`  continuing ${resumed.fromSessionId}\n`));
       if (resumed.droppedTail > 0)
@@ -278,6 +285,7 @@ export async function runAgent(args: string[]): Promise<void> {
   if (note && reporting !== "jsonl")
     process.stderr.write(live ? dim(`  ${note}\n`) : `ambient: ${note}\n`);
 
+  const recovered = resumed?.pendingMessages ?? [];
   const opts: RunOptions = {
     sessionId,
     mode: a.mode,
@@ -305,9 +313,21 @@ export async function runAgent(args: string[]): Promise<void> {
     artifact: (content) => saveObject(sessionId, content), // offload large tool outputs
     readArtifact: (handle) => readObject(sessionId, handle),
     loadImage: makeImageLoader(sessionId),
-    ...(attachments.length > 0 ? { attachments } : {}),
+    ...([...attachments, ...recovered.flatMap((message) => message.attachments)].length > 0
+      ? { attachments: [...attachments, ...recovered.flatMap((message) => message.attachments)] }
+      : {}),
+    ...(recovered.length
+      ? { queuedMessageIds: recovered.map((message) => message.messageId) }
+      : {}),
     ...(goal ? { goal } : {}),
-    ...(resumed ? { resumeContext: resumed.context } : {}),
+    ...(resumed
+      ? {
+          resumeContext: [
+            resumed.context,
+            ...recovered.map((message) => `## Undelivered user message\n${message.text}`),
+          ].join("\n\n"),
+        }
+      : {}),
     ...(a.appendSystemPrompt ? { instructions: a.appendSystemPrompt } : {}),
     ...(hooks ? { hooks } : {}),
     ...(permissionRules ? { permissionRules } : {}),

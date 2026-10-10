@@ -17,6 +17,7 @@ import { listWorkspaceFiles } from "../agent/file-list.js";
 import { fireAndForget } from "../agent/hooks.js";
 import { makeMcpControl } from "../agent/mcp-control.js";
 import { makeMemoryPort } from "../agent/memory-port.js";
+import { loadResumeContext } from "../agent/resume-context.js";
 import { type SettingsConfig, workspaceSettings } from "../agent/workspace-settings.js";
 import { openBrowser, signInInteractive } from "../commands/login.js";
 import { configDir } from "../config.js";
@@ -35,6 +36,7 @@ import { checkForUpdate, updateCommand } from "../update-check.js";
 import { CURRENT_VERSION } from "../version.js";
 import { App } from "./App.js";
 import { installAsciiFallback, needsAsciiFallback } from "./ascii-console.js";
+import { FrameAcks } from "./frame-acks.js";
 import { appendHistory, historyPath, loadHistory } from "./history.js";
 import { checkStartupKey } from "./startup-key.js";
 import type { AgentMode, Effort, Permission } from "./state.js";
@@ -139,6 +141,15 @@ export async function runTui(opts: TuiOptions): Promise<void> {
     ),
   };
   const cwd = process.cwd();
+  const previous = opts.initialTask
+    ? undefined
+    : loadResumeContext("latest", { workspaceRoot: cwd });
+  const recovery =
+    previous && !("error" in previous) && previous.interrupted ? previous : undefined;
+  const recoveryError =
+    previous && "error" in previous && !previous.error.startsWith("no earlier")
+      ? previous.error
+      : undefined;
   // Fetch the fleet and the update check together so neither adds latency to the splash. The update check is
   // cached (at most one network call per 6h) and fully best-effort — it never blocks or fails the launch.
   const [fleet, updateInfo] = await Promise.all([
@@ -224,9 +235,13 @@ export async function runTui(opts: TuiOptions): Promise<void> {
 
   // The session in use (a /clear starts a new one) — for the SessionEnd hook when the TUI closes.
   let currentSession = "";
+  const frames = new FrameAcks();
   const instance = render(
     createElement(App, {
       client,
+      afterRender: frames.afterRender,
+      ...(recovery ? { recovery } : {}),
+      ...(recoveryError ? { recoveryError } : {}),
       makeWriter: (sessionId: string) => {
         currentSession = sessionId;
         return new SessionWriter(sessionId, () => new Date().toISOString());
@@ -269,7 +284,7 @@ export async function runTui(opts: TuiOptions): Promise<void> {
         return formatFleetRows(models, laneResolver());
       },
     }),
-    { exitOnCtrlC: false },
+    { exitOnCtrlC: false, onRender: frames.rendered },
   );
 
   // Now that the UI is on screen, connect MCP in the background; runs read the tools live. A failure never

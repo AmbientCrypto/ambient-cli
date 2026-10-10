@@ -67,4 +67,46 @@ describe("continuing a session", () => {
       error: 'no session "ses_missing" (ambient resume lists them)',
     });
   });
+
+  it("restores pending messages and a compaction checkpoint after interruption", () => {
+    const id = newSessionId();
+    const writer = new SessionWriter(id, () => new Date().toISOString());
+    const turnId = newTurnId();
+    writer.append({
+      schemaVersion: 1,
+      kind: "session.started",
+      sessionId: id,
+      cwd: "/work/app",
+      workspaceRoot: "/work/app",
+    });
+    writer.append({
+      schemaVersion: 1,
+      kind: "turn.started",
+      sessionId: id,
+      turnId,
+      input: "finish the build",
+    });
+    writer.append({
+      schemaVersion: 1,
+      kind: "context.compacted",
+      sessionId: id,
+      turnId,
+      keptTokens: 20,
+      summarizedPhases: 1,
+      summary: "All earlier tests passed",
+    });
+    writer.append({
+      schemaVersion: 1,
+      kind: "steer.queued",
+      sessionId: id,
+      messageId: "waiting",
+      text: "check CI next",
+    });
+    const recovered = loadResumeContext(id);
+    if ("error" in recovered) throw new Error(recovered.error);
+    expect(recovered.interrupted).toBe(true);
+    expect(recovered.task).toBe("finish the build");
+    expect(recovered.pendingMessages.map((message) => message.text)).toEqual(["check CI next"]);
+    expect(recovered.context).toContain("All earlier tests passed");
+  });
 });

@@ -3,34 +3,33 @@
 # publish-npm.sh — publish the Ambient CLI to npm so anyone can `npm i -g ambient-code`.
 #
 # Prerequisites (one-time): `npm login` as the account that owns the package name.
-# The published package is the self-contained bundle (dist/amb.js) + react/ink/undici — nothing else.
+# Publishes the verified bundle and its locked runtime dependencies.
 #
 #   NPM_NAME=ambient-code ./scripts/publish-npm.sh          # publish
-#   ./scripts/publish-npm.sh --dry-run                      # stage + `npm publish --dry-run` (no upload)
+#   ./scripts/publish-npm.sh --dry-run                      # verify + `npm publish --dry-run` (no upload)
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
 DRY="${1:-}"
 
-echo "▸ building the bundle…"
-pnpm -r build >/dev/null
-
-stage="$(mktemp -d)"
-trap 'rm -rf "$stage"' EXIT
-mkdir -p "$stage/dist"
-cp packages/cli/dist/amb.js "$stage/dist/amb.js"
-for f in README.md LICENSE NOTICE; do [ -f "$f" ] && cp "$f" "$stage/$f"; done
-node scripts/npm-package-json.mjs > "$stage/package.json"
-
-NAME="$(node -e 'process.stdout.write(require(process.argv[1]).name)' "$stage/package.json")"
-VERSION="$(node -e 'process.stdout.write(require(process.argv[1]).version)' "$stage/package.json")"
+NAME="${NPM_NAME:-ambient-code}"
+VERSION="$(node -e 'process.stdout.write(require("./packages/cli/package.json").version)')"
+TGZ="$REPO/dist-pack/${NAME}-${VERSION}.tgz"
+[ -f "$TGZ" ] || { echo "Pack and verify the release first: bash scripts/pack.sh && node scripts/verify-install.mjs"; exit 1; }
+node --input-type=module - "$TGZ" <<'JS'
+import {readFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+const path = process.argv[2];
+const verified = JSON.parse(readFileSync(path.replace(/\.tgz$/, '.verified.json'), 'utf8'));
+if (verified.sha256 !== createHash('sha256').update(readFileSync(path)).digest('hex')) throw new Error('Tarball changed after verification; rerun scripts/verify-install.mjs');
+JS
 echo "▸ publishing ${NAME}@${VERSION}…"
 
 if [ "$DRY" = "--dry-run" ]; then
-  ( cd "$stage" && npm publish --access public --dry-run )
+  npm publish "$TGZ" --access public --dry-run
   echo "✓ dry run only — nothing was uploaded."
 else
-  ( cd "$stage" && npm publish --access public )
+  npm publish "$TGZ" --access public
   echo "✓ published  →  npm i -g ${NAME}"
 fi

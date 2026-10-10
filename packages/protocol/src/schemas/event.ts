@@ -68,9 +68,34 @@ export const EventSchema = z.discriminatedUnion("kind", [
     workspaceRoot: z.string(),
     model: z.string().optional(),
   }),
-  sev("session.resumed", { fromEventId: z.string().optional() }),
+  sev("session.resumed", {
+    fromEventId: z.string().optional(),
+    fromSessionId: idStr("ses").optional(),
+    context: z.string().optional(),
+    plan: z
+      .object({
+        tasks: z
+          .array(z.object({ text: z.string(), status: z.enum(["pending", "active", "done"]) }))
+          .max(50),
+      })
+      .optional(),
+  }),
   sev("session.branched", { fromSessionId: z.string(), atSeq: z.number().int().nonnegative() }),
   sev("session.paused", { reason: z.string() }),
+  sev("steer.queued", {
+    messageId: z.string().min(1),
+    text: z.string(),
+    attachments: z
+      .array(AttachmentRefSchema.extend({ objectRef: z.string().optional() }))
+      .optional(),
+  }),
+  sev("steer.discarded", { messageIds: z.array(z.string()), reason: z.string() }),
+  sev("ci.progress", {
+    repo: z.string(),
+    runId: z.number().int().positive(),
+    summary: z.string(),
+    active: z.boolean(),
+  }),
   // A user-set session-long north-star objective. Durable so `amb resume` can restore it. An empty string is
   // a CLEAR (the /goal clear command). The latest goal.set in the log wins.
   sev("goal.set", { text: z.string() }),
@@ -89,6 +114,7 @@ export const EventSchema = z.discriminatedUnion("kind", [
   // ── turn-scoped ──────────────────────────────────────────────────────────
   tev("turn.started", {
     input: z.string(),
+    messageIds: z.array(z.string()).optional(),
     // References only (mime/bytes/sha256/source) — NEVER the base64 bytes, which would bloat the durable log.
     attachments: z.array(AttachmentRefSchema).optional(),
   }),
@@ -104,7 +130,7 @@ export const EventSchema = z.discriminatedUnion("kind", [
   }),
   // A mid-run STEER: a user message injected into the RUNNING conversation (the user redirected the agent
   // without cancelling). Durable so a resumed session reconstructs the full conversation.
-  tev("steer", { text: z.string() }),
+  tev("steer", { text: z.string(), messageId: z.string().optional() }),
   // How an attached image was handled: seen NATIVELY by a vision model, DESCRIBED via a relay vision model,
   // or degraded (no vision model / cold / failed). Drives a single calm UI line; never carries image bytes.
   // A vision model is about to describe images for a model that can't see them (one per attempt).
@@ -152,6 +178,7 @@ export const EventSchema = z.discriminatedUnion("kind", [
     maxTokens: z.number().int().optional(),
   }),
   tev("context.compacted", {
+    summary: z.string().optional(),
     keptTokens: z.number().int().nonnegative(),
     summarizedPhases: z.number().int().nonnegative(),
   }),

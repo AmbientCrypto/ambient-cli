@@ -28,6 +28,7 @@ import {
   normalizeEffortSetting,
 } from "@amb/runtime";
 import {
+  RECOVERY_LIMITS,
   type SessionWriter,
   parsePlanTasks,
   readObject,
@@ -36,7 +37,7 @@ import {
   saveObject,
 } from "@amb/sessions";
 import { createBuiltinRegistry } from "@amb/tools-core";
-import { Box, Static, Text, useApp, useInput, useStdout } from "ink";
+import { Box, Static, Text, useApp, useInput, useStdout, useWindowSize } from "ink";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { expandSlashCommand } from "../agent/command-expand.js";
@@ -47,6 +48,7 @@ import { makeImageLoader } from "../agent/load-image.js";
 import { type McpControl, mcpReport, splitArgs } from "../agent/mcp-control.js";
 import { type MemoryPort, quickNote } from "../agent/memory-port.js";
 import { buildRegistry } from "../agent/registry.js";
+import type { ResumeContext } from "../agent/resume-context.js";
 import { makeSubagentTool } from "../agent/subagent-tool.js";
 import { makeVerifyPort } from "../agent/verify-port.js";
 import { makeWorkspaceContextPort } from "../agent/workspace-context-port.js";
@@ -116,6 +118,11 @@ import { fuzzyRank } from "./fuzzy.js";
 import { helpText } from "./help.js";
 import { activeMention, insertMention } from "./mention.js";
 import { PromptQueue } from "./prompt-queue.js";
+import {
+  type SteeringMessage,
+  acceptQueuedMessage,
+  assertQueueCapacity,
+} from "./queued-messages.js";
 import { contextReport, tokens, usageReport } from "./reports.js";
 import {
   type Activity,
@@ -144,6 +151,12 @@ import {
 import { AmbientTheme } from "./theme.js";
 import { type AccountPort, useKeyPrompt } from "./use-key-prompt.js";
 import { type HistoryPort, usePromptHistory } from "./use-prompt-history.js";
+import {
+  VIEW_BYTE_LIMIT,
+  VIEW_ITEM_LIMIT,
+  acknowledgePrinted,
+  boundView,
+} from "./view-retention.js";
 import { visionNote } from "./vision-note.js";
 
 export interface AppDeps {
@@ -200,9 +213,15 @@ export interface AppDeps {
   userInstructions?: boolean;
   /** This workspace's hooks and permission rules: applied per run, listed by /hooks and /permissions. */
   settings?: WorkspaceSettings;
+  /** Acknowledge Static output only after Ink writes its frame. */
+  afterRender?: (callback: () => void) => () => void;
+  recovery?: ResumeContext;
+  recoveryError?: string;
 }
 
 type Action =
+  | { t: "restored"; plan: PlanTask[]; goal?: string }
+  | { t: "printed"; throughId: string }
   | { t: "event"; ev: NewEvent; at?: number }
   | { t: "stop"; stopReason: string }
   | { t: "agentMode"; agentMode: AgentMode }
@@ -219,8 +238,12 @@ type Action =
 
 function appReducer(state: ViewState, action: Action): ViewState {
   switch (action.t) {
+    case "restored":
+      return { ...state, plan: action.plan, ...(action.goal ? { goal: action.goal } : {}) };
+    case "printed":
+      return acknowledgePrinted(state, action.throughId);
     case "event":
-      return reduce(state, action.ev, action.at);
+      return boundView(reduce(state, action.ev, action.at));
     case "stop":
       return withStop(state, action.stopReason);
     case "agentMode":
@@ -322,8 +345,11 @@ function withPlan(plan: PlanTask[]): string {
 export function App(deps: AppDeps): ReactNode {
   const { exit } = useApp();
   const { stdout } = useStdout();
-  const width = stdout?.columns ?? 80;
-  const rows = stdout?.rows ?? 24;
+  const { columns: width, rows } = useWindowSize();
+  const [recoveryOpen, setRecoveryOpen] = useState(!!deps.recovery);
+  const recoveryOpenRef = useRef(!!deps.recovery);
+  const recoveryRef = useRef<ResumeContext | undefined>(undefined);
+  const recoverySeededRef = useRef(false);
 
   // The reasoning level the last run actually used, so a short "continue" keeps it under `auto`.
   const lastEffortRef = useRef<ReasoningLevel | undefined>(undefined);
@@ -340,6 +366,9 @@ export function App(deps: AppDeps): ReactNode {
   useEffect(() => {
     lastEffortRef.current = state.status.resolvedEffort;
   }, [state.status.resolvedEffort]);
+  useEffect(() => {
+    if (deps.recoveryError) dispatch({ t: "notice", level: "warn", text: deps.recoveryError });
+  }, [deps.recoveryError]);
   const [input, setInput] = useState("");
   const [cursor, setCursor] = useState(0); // caret offset into `input` (composer editing)
   const [pending, setPending] = useState<ApprovalRequest | null>(null);
@@ -392,6 +421,11 @@ export function App(deps: AppDeps): ReactNode {
   const [staticEpoch, setStaticEpoch] = useState(0);
   /** How many transcript items <Static> has printed this epoch (it only ever grows until /clear). */
   const committedRef = useRef(0);
+  const retainedEpochRef = useRef(0);
+  if (retainedEpochRef.current !== (state.scrollbackEpoch ?? 0)) {
+    retainedEpochRef.current = state.scrollbackEpoch ?? 0;
+    committedRef.current = 0;
+  }
   // The in-app key flow. A run that fails because Ambient rejected the key (revoked or mistyped) opens the
   // key panel and re-runs that task once a working key is saved; /login opens it on demand.
   const keyNotice = useCallback(
@@ -533,10 +567,13 @@ export function App(deps: AppDeps): ReactNode {
   const hist = usePromptHistory(deps.history);
   const cursorRef = useRef(0); // read synchronously by the key handler (mirrors the input-ref pattern)
   const goalColRef = useRef<number | undefined>(undefined); // sticky column across a run of ↑/↓ moves
-  const queueRef = useRef<{ text: string; attachments: ImageAttachment[] }[]>([]);
+  const queueRef = useRef<
+    { text: string; attachments: ImageAttachment[]; messageIds?: string[] }[]
+  >([]);
   // Text messages the user sent WHILE a run is in flight — the running agent pulls these at each turn
   // boundary and injects them (steering). Anything left when the run ends drains as a follow-up turn.
-  const steerRef = useRef<string[]>([]);
+  const steerRef = useRef<SteeringMessage[]>([]);
+  const waitWakeRef = useRef(new AbortController());
   // Set when you press Enter on an empty line while messages wait on a subagent wave: the wave wraps up and
   // reports now, so the agent reads your message sooner. Cleared when a run starts.
   const hurryRef = useRef(false);
@@ -586,9 +623,9 @@ export function App(deps: AppDeps): ReactNode {
   // hash chain). Reset to null by /clear so a cleared screen starts a genuinely new conversation.
   const sessionIdRef = useRef<string | null>(null);
   const writerRef = useRef<SessionWriter | null>(null);
-  const runTaskRef = useRef<((task: string, attach?: ImageAttachment[]) => Promise<void>) | null>(
-    null,
-  );
+  const runTaskRef = useRef<
+    ((task: string, attach?: ImageAttachment[], messageIds?: string[]) => Promise<void>) | null
+  >(null);
   const MAX_ATTACHMENTS = 4;
   const setAttachments = (next: ImageAttachment[]): void => {
     attachmentsRef.current = next;
@@ -644,7 +681,7 @@ export function App(deps: AppDeps): ReactNode {
   const [jobsEpoch, setJobsEpoch] = useState(0);
   useEffect(() => {
     void jobsEpoch;
-    const { jobs, tasks } = runStateRef.current;
+    const { jobs, tasks, ci } = runStateRef.current;
     const off = jobs.onFinish((job) => {
       dispatch({
         t: "notice",
@@ -655,6 +692,7 @@ export function App(deps: AppDeps): ReactNode {
     const stop = () => {
       jobs.stopAll();
       tasks.stopAll(); // background subagents too
+      ci.stopAll();
     };
     process.once("exit", stop);
     return () => {
@@ -771,6 +809,27 @@ export function App(deps: AppDeps): ReactNode {
     // Don't SILENTLY drop pending messages on cancel (the user noticed queued items just vanished) —
     // clear them but say so.
     const dropped = steerRef.current.length + queueRef.current.length;
+    const messageIds = [
+      ...steerRef.current.map((m) => m.messageId),
+      ...queueRef.current.flatMap((m) => m.messageIds ?? []),
+    ];
+    if (messageIds.length && writerRef.current && sessionIdRef.current) {
+      try {
+        writerRef.current.append({
+          schemaVersion: 1,
+          kind: "steer.discarded",
+          sessionId: sessionIdRef.current,
+          messageIds,
+          reason: "cancelled by user",
+        });
+      } catch (error) {
+        dispatch({
+          t: "notice",
+          level: "error",
+          text: `couldn't record cancellation: ${(error as Error).message}`,
+        });
+      }
+    }
     queueRef.current = [];
     steerRef.current = [];
     setQueued([]);
@@ -800,7 +859,7 @@ export function App(deps: AppDeps): ReactNode {
   }, []);
 
   const runTask = useCallback(
-    async (task: string, attach: ImageAttachment[] = []) => {
+    async (task: string, attach: ImageAttachment[] = [], messageIds: string[] = []) => {
       if (busyRef.current) return;
       busyRef.current = true;
       pendingSwitchRef.current = undefined; // a switch picked during an earlier run already set modelRef
@@ -860,10 +919,11 @@ export function App(deps: AppDeps): ReactNode {
       const priorContext =
         carryForward || skipLogReplayRef.current
           ? ""
-          : reconstructTranscript(
-              readSession(sessionId).events,
+          : (recoveryRef.current?.context ??
+            reconstructTranscript(
+              readSession(sessionId, undefined, RECOVERY_LIMITS).events,
               (t) => guardUntrustedResult(t).text,
-            );
+            ));
       const controller = new AbortController();
       controllerRef.current = controller;
       // Snapshot the axes for THIS run (a mid-run Tab/Shift+Tab must not change what's already flying).
@@ -881,6 +941,38 @@ export function App(deps: AppDeps): ReactNode {
       dispatch({ t: "echo", text: finalTask });
 
       try {
+        if (recoveryRef.current && !recoverySeededRef.current) {
+          const recovered = recoveryRef.current;
+          writer.append({
+            schemaVersion: 1,
+            kind: "session.resumed",
+            sessionId,
+            fromSessionId: recovered.fromSessionId,
+            ...(recovered.priorLastEventId ? { fromEventId: recovered.priorLastEventId } : {}),
+            context: recovered.context,
+            plan: { tasks: recovered.plan },
+          });
+          for (const message of recovered.pendingMessages) {
+            const accepted = acceptQueuedMessage(
+              writer,
+              sessionId,
+              message.text,
+              message.attachments,
+              message.messageId,
+            );
+            if (message.attachments.length)
+              queueRef.current = [
+                ...queueRef.current,
+                { ...message, messageIds: [message.messageId] },
+              ];
+            else steerRef.current = [...steerRef.current, accepted];
+          }
+          recoverySeededRef.current = true;
+          setQueued([
+            ...steerRef.current.map((m) => m.text),
+            ...queueRef.current.map((m) => m.text),
+          ]);
+        }
         // Shared durable-event sink: persist FIRST (validated), then dispatch to the reducer — so the UI never
         // shows an event that wasn't durably logged, and a write failure aborts + surfaces one way everywhere.
         const emit = createDurableEventSink({
@@ -955,12 +1047,15 @@ export function App(deps: AppDeps): ReactNode {
           emit,
           approve,
           ask, // the `ask_user` tool opens the questionnaire overlay through this
+          queuedMessageIds: messageIds,
+          waitSignal: () => waitWakeRef.current.signal,
           // Mid-run STEER: the running agent pulls any messages the user sent while it was working and
           // injects them at the next turn boundary. Consumed items leave the visible queue.
           steer: () => {
             if (steerRef.current.length === 0) return [];
             const msgs = steerRef.current;
             steerRef.current = [];
+            waitWakeRef.current = new AbortController();
             hurryRef.current = false; // read — a later wave in this run isn't cut short
             setQueued([...queueRef.current.map((q) => q.text)]);
             return msgs;
@@ -1099,7 +1194,14 @@ export function App(deps: AppDeps): ReactNode {
           // Mid-run messages wait in the queue (not injected into whatever runs next).
           if (leftoverSteer.length > 0) {
             steerRef.current = [];
-            queueRef.current.unshift({ text: leftoverSteer.join("\n"), attachments: [] });
+            queueRef.current = [
+              {
+                text: leftoverSteer.map((m) => m.text).join("\n"),
+                attachments: [],
+                messageIds: leftoverSteer.map((m) => m.messageId),
+              },
+              ...queueRef.current,
+            ];
             setQueued(queueRef.current.map((q) => q.text));
           }
           // Nothing ran yet → retry the task as if it never happened. Tools already ran → keep what they did
@@ -1115,12 +1217,17 @@ export function App(deps: AppDeps): ReactNode {
         } else if (leftoverSteer.length > 0) {
           steerRef.current = [];
           setQueued(queueRef.current.map((q) => q.text));
-          void runTaskRef.current?.(leftoverSteer.join("\n"), []);
+          waitWakeRef.current = new AbortController();
+          void runTaskRef.current?.(
+            leftoverSteer.map((m) => m.text).join("\n"),
+            [],
+            leftoverSteer.map((m) => m.messageId),
+          );
         } else {
           const next = queueRef.current.shift();
           if (next) {
             setQueued(queueRef.current.map((q) => q.text));
-            void runTaskRef.current?.(next.text, next.attachments);
+            void runTaskRef.current?.(next.text, next.attachments, next.messageIds);
           }
         }
       }
@@ -1271,10 +1378,17 @@ export function App(deps: AppDeps): ReactNode {
       const typed = steerRef.current;
       steerRef.current = [];
       const next =
-        typed.length > 0 ? { text: typed.join("\n"), attachments: [] } : queueRef.current.shift();
+        typed.length > 0
+          ? {
+              text: typed.map((m) => m.text).join("\n"),
+              attachments: [],
+              messageIds: typed.map((m) => m.messageId),
+            }
+          : queueRef.current.shift();
+      waitWakeRef.current = new AbortController();
       setQueued(queueRef.current.map((q) => q.text));
       if (next && !controller.signal.aborted)
-        void runTaskRef.current?.(next.text, next.attachments);
+        void runTaskRef.current?.(next.text, next.attachments, next.messageIds);
     }
   };
 
@@ -1617,6 +1731,8 @@ export function App(deps: AppDeps): ReactNode {
         // user just cleared). Only when idle — a mid-run /clear must not swap the session out from under it.
         const fresh = !busyRef.current;
         if (fresh) {
+          recoveryRef.current = undefined;
+          recoverySeededRef.current = false;
           sessionIdRef.current = null;
           writerRef.current = null;
           // Nothing from the cleared conversation carries into the next one: not its plan, not its effort.
@@ -1762,9 +1878,31 @@ export function App(deps: AppDeps): ReactNode {
     return matches;
   };
 
-  useInput((ch, key) => {
+  useInput((ch, rawKey) => {
+    const key = {
+      ...rawKey,
+      return: rawKey.return || ch === "\n" || ch === "\r" || ch === "\x1bOM",
+    };
     // 0) The key panel owns the keyboard while open (Ctrl+C still quits).
     if (!(key.ctrl && ch === "c") && keyFlow.handleInput(ch, key)) return;
+    if (recoveryOpenRef.current && !(key.ctrl && ch === "c")) {
+      if (key.escape || key.return) {
+        recoveryOpenRef.current = false;
+        setRecoveryOpen(false);
+      }
+      if (key.return && deps.recovery) {
+        const recovered = deps.recovery;
+        recoveryRef.current = recovered;
+        planRef.current = recovered.plan;
+        const goal = deps.initialGoal ?? recovered.goal;
+        goalRef.current = goal ?? "";
+        dispatch({ t: "restored", plan: recovered.plan, ...(goal ? { goal } : {}) });
+        void runTaskRef.current?.(
+          `Continue the interrupted task: ${recovered.task?.slice(0, 64_000) ?? "follow the saved plan"}. Reconcile interrupted work before proceeding.`,
+        );
+      }
+      return;
+    }
     // 1) A pending approval takes precedence. Two equal paths to the SAME four outcomes (resolveApprovalKey):
     //    move the ▸ cursor with ↑/↓ and confirm with Enter/Space, OR press the y/a/b/n hotkey to jump-and-confirm.
     if (approvalResolver.current) {
@@ -2199,14 +2337,37 @@ export function App(deps: AppDeps): ReactNode {
       if (busyRef.current) {
         if (cancellingRef.current) return;
         if (!task && !hasAttach) return;
+        let accepted: SteeringMessage;
+        try {
+          assertQueueCapacity([...steerRef.current, ...queueRef.current], task, attach);
+          accepted = acceptQueuedMessage(writerRef.current, sessionIdRef.current, task, attach);
+        } catch (error) {
+          dispatch({
+            t: "notice",
+            level: "error",
+            text: `Message not queued: ${(error as Error).message}`,
+          });
+          return;
+        }
         // Text-only → STEER the running agent (injected at its next turn boundary). With an attachment →
         // queue a follow-up RUN (images need the full run setup and can't be injected mid-conversation).
         if (task && !hasAttach) {
-          steerRef.current = [...steerRef.current, task];
+          steerRef.current = [...steerRef.current, accepted];
+          waitWakeRef.current.abort();
         } else {
-          queueRef.current = [...queueRef.current, { text: task, attachments: attach }];
+          queueRef.current = [
+            ...queueRef.current,
+            { text: task, attachments: attach, messageIds: [accepted.messageId] },
+          ];
         }
-        setQueued([...steerRef.current, ...queueRef.current.map((q) => q.text)]);
+        setQueued([...steerRef.current.map((m) => m.text), ...queueRef.current.map((q) => q.text)]);
+        dispatch({
+          t: "notice",
+          level: "info",
+          text: hasAttach
+            ? "Message saved for the next run."
+            : "Message saved; the agent will read it at the next step.",
+        });
         setAttachments([]);
         setBuffer("");
       } else {
@@ -2331,16 +2492,29 @@ export function App(deps: AppDeps): ReactNode {
       )
     : 0;
   const bannerShort =
+    recoveryOpen ||
     FULL_BANNER_ROWS +
       updateRows +
       splashNoteRows +
       (state.goal ? 1 : 0) +
       (attachments.length > 0 ? 1 : 0) +
       COMPOSER_ROWS >
-    rows - 1;
+      rows - 1;
   committedRef.current = Math.max(committedRef.current, commitCount);
   const settledItems = state.transcript.slice(0, commitCount);
   const liveItems = state.transcript.slice(commitCount);
+  const throughId = settledItems.at(-1)?.id;
+  const releasePrinted =
+    settledItems.length >= VIEW_ITEM_LIMIT ||
+    Buffer.byteLength(JSON.stringify(settledItems)) >= VIEW_BYTE_LIMIT;
+  useEffect(() => {
+    if (!releasePrinted || !throughId) return;
+    const ack = () => dispatch({ t: "printed", throughId });
+    if (deps.afterRender) return deps.afterRender(ack);
+    // The test renderer writes synchronously on commit; never prune during React render.
+    const timer = setImmediate(ack);
+    return () => clearImmediate(timer);
+  }, [releasePrinted, throughId, deps.afterRender]);
   const interior = Math.max(1, width - 2);
   // Visible queue rows — a rows-derived budget so the always-on panel stack stays under the screen height.
   const qMax = Math.min(5, Math.max(1, rows - 20));
@@ -2395,12 +2569,25 @@ export function App(deps: AppDeps): ReactNode {
     <Box flexDirection="column" width={width} paddingX={1}>
       {/* SETTLED turns print ONCE into the terminal's REAL scrollback via <Static> — scroll up (trackpad/
           wheel) to see history. Never re-rendered, so each turn commits cleanly instead of repainting. */}
-      <Static key={staticEpoch} items={settledItems}>
+      <Static key={`${staticEpoch}:${state.scrollbackEpoch ?? 0}`} items={settledItems}>
         {(item) => <TranscriptRow key={item.id} item={item} width={interior} settled />}
       </Static>
 
       {/* THE CLAMP — bounds the entire dynamic frame to rows-1 so Ink never full-clears (erasing scrollback). */}
       <Box flexDirection="column" maxHeight={Math.max(4, rows - 1)} overflowY="hidden">
+        {recoveryOpen ? (
+          <Box flexDirection="column" flexShrink={0}>
+            <Text wrap="truncate-end">
+              Resume interrupted session · {deps.recovery?.task?.slice(0, 80)}
+            </Text>
+            <Text dimColor>enter resumes · esc starts fresh</Text>
+          </Box>
+        ) : null}
+        {state.ciStatus ? (
+          <Text dimColor wrap="truncate-end">
+            {state.ciStatus}
+          </Text>
+        ) : null}
         {/* Growable, bottom-anchored: live transcript + panels. Clips its TOP when it can't all fit, so the
             most-recent output (and the panels below it) stay visible while old streamed lines scroll off. */}
         <Box flexDirection="column" flexShrink={1} overflowY="hidden" justifyContent="flex-end">

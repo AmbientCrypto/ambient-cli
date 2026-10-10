@@ -22,10 +22,7 @@ NAME="${NPM_NAME:-ambient-code}"
 # Stage a clean package in a scratch dir that is ALWAYS removed (even on failure).
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
-mkdir -p "$stage/dist"
-cp packages/cli/dist/amb.js "$stage/dist/amb.js"
-for f in README.md LICENSE NOTICE; do [ -f "$f" ] && cp "$f" "$stage/$f"; done
-node scripts/npm-package-json.mjs > "$stage/package.json"
+node scripts/stage-package.mjs "$stage"
 
 mkdir -p "$REPO/dist-pack"
 ( cd "$stage" && npm pack --silent --pack-destination "$REPO/dist-pack" >/dev/null )

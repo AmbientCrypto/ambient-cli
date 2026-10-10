@@ -41,6 +41,10 @@ export function parsePlanTasks(args: unknown): PlanTask[] | null {
 export function latestPlan(events: Event[]): PlanTask[] {
   let latest: PlanTask[] = [];
   for (const ev of events) {
+    if (ev.kind === "session.resumed" && ev.plan) {
+      const parsed = parsePlanTasks(ev.plan);
+      if (parsed) latest = parsed;
+    }
     if (ev.kind === "tool.proposed" && ev.toolName === "plan") {
       const parsed = parsePlanTasks(ev.args);
       if (parsed) latest = parsed;

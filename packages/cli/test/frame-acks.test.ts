@@ -1,0 +1,32 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { FrameAcks } from "../src/tui/frame-acks.js";
+afterEach(() => vi.useRealTimers());
+it("acknowledges only after a frame and honors cancelled effects", () => {
+  vi.useFakeTimers();
+  const frames = new FrameAcks();
+  const printed = vi.fn();
+  const cancelled = vi.fn();
+  frames.afterRender(printed);
+  const cancel = frames.afterRender(cancelled);
+  cancel();
+  vi.runAllTimers();
+  expect(printed).not.toHaveBeenCalled();
+  frames.rendered();
+  vi.runAllTimers();
+  expect(printed).toHaveBeenCalledTimes(1);
+  expect(cancelled).not.toHaveBeenCalled();
+  frames.rendered();
+  vi.runAllTimers();
+  expect(printed).toHaveBeenCalledTimes(1);
+});
+it("defers post-commit registrations past effects, even when onRender arrived first", () => {
+  vi.useFakeTimers();
+  const frames = new FrameAcks();
+  const printed = vi.fn();
+  frames.rendered();
+  vi.runAllTimers();
+  frames.afterRender(printed);
+  expect(printed).not.toHaveBeenCalled();
+  vi.runAllTimers();
+  expect(printed).toHaveBeenCalledTimes(1);
+});
