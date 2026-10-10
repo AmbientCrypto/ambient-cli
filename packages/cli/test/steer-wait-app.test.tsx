@@ -25,6 +25,81 @@ const waitFor = async (fn: () => boolean) => {
 };
 
 it.each(["\r", "\n", "\x1bOM"])(
+  "a second Enter %j interrupts streaming and consumes queued steering in the same run",
+  async (enter) => {
+    let requests = 0;
+    let interrupted = false;
+    let events: NewEvent[] = [];
+    const client: ChatClient = {
+      fetchCatalog: async () => [model],
+      chat: async (params) => {
+        requests++;
+        if (requests === 1) {
+          params.onReasoning?.("Thinking about the original task");
+          params.onContent?.("An unfinished answer");
+          return await new Promise((_, reject) => {
+            params.signal.addEventListener(
+              "abort",
+              () => {
+                interrupted = true;
+                reject(new Error("stream aborted"));
+              },
+              { once: true },
+            );
+          });
+        }
+        expect(JSON.stringify(params.messages)).toContain("check failure first");
+        return { content: "STEER DELIVERED", toolCalls: [] };
+      },
+    };
+    const ui = render(
+      <App
+        client={client}
+        makeWriter={() =>
+          ({
+            append: (ev: NewEvent) => {
+              events = [...events, ev];
+            },
+            close() {},
+            path: "/dev/null",
+          }) as unknown as SessionWriter
+        }
+        agentMode="build"
+        permission="bypass"
+        effort="auto"
+        requestedModel="vendor/m"
+        maxTurns={1}
+        cwd={process.cwd()}
+        workspaceRoot={process.cwd()}
+      />,
+    );
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      for (const c of "build") ui.stdin.write(c);
+      ui.stdin.write(enter);
+      await waitFor(() => requests === 1);
+      for (const c of "check failure first") ui.stdin.write(c);
+      ui.stdin.write(enter);
+      await waitFor(() => events.some((ev) => ev.kind === "steer.queued"));
+      expect(interrupted).toBe(false);
+      ui.stdin.write(enter);
+      await waitFor(() => events.some((ev) => ev.kind === "turn.finished"));
+      expect(interrupted).toBe(true);
+      expect(requests).toBe(2);
+      const receipt = events.find((ev) => ev.kind === "steer.queued");
+      const consumed = events.find((ev) => ev.kind === "steer");
+      expect(consumed?.kind === "steer" ? consumed.messageId : undefined).toBe(
+        receipt?.kind === "steer.queued" ? receipt.messageId : "missing",
+      );
+      expect(events.filter((ev) => ev.kind === "turn.started")).toHaveLength(1);
+      expect(events.some((ev) => ev.kind === "steer.discarded")).toBe(false);
+    } finally {
+      ui.unmount();
+    }
+  },
+);
+
+it.each(["\r", "\n", "\x1bOM"])(
   "Enter %j durably accepts steering and wakes a quiet job",
   async (enter) => {
     let requests = 0;

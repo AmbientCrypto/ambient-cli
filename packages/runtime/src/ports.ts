@@ -204,6 +204,8 @@ export interface RunOptions {
   steer?: () => Array<string | { text: string; messageId: string }>;
   /** Latest wait-only signal; the UI rotates it after draining accepted steering. */
   waitSignal?: () => AbortSignal;
+  /** Interrupt only inference to consume queued steering; never cancel an active tool. Rotate on drain. */
+  steerSignal?: () => AbortSignal;
   /** Session-scoped permission grants (mutated in place as the user picks "allow for this session"). Pass a
    *  STABLE array across turns so an allow-session grant actually persists — the TUI holds one per session.
    *  Absent ⇒ a fresh per-run array (grants last one run only). */

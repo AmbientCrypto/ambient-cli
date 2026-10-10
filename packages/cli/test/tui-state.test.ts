@@ -1397,3 +1397,30 @@ describe("vision relay activity", () => {
     expect(last?.text).toContain("described it (1,420 chars)");
   });
 });
+
+it("settles an interrupted stream before steering without failing active tools", () => {
+  const streaming = {
+    ...init(),
+    thinking: "old thought",
+    thinkingSince: 10,
+    transcript: [
+      { kind: "assistant" as const, id: "answer", text: "partial", streaming: true, spin: 0 },
+      {
+        kind: "tool" as const,
+        id: "tool",
+        name: "bash",
+        preview: "running",
+        status: "running" as const,
+      },
+    ],
+  };
+  const interrupted = reduce(
+    streaming,
+    { ...base, kind: "operation.cancelled", scope: "stream" },
+    20,
+  );
+  expect(interrupted.thinking).toBe("");
+  expect(interrupted.thinkingSince).toBeUndefined();
+  expect(interrupted.transcript[0]).toMatchObject({ streaming: false, text: "partial" });
+  expect(interrupted.transcript[1]).toMatchObject({ status: "running" });
+});

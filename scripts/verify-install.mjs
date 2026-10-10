@@ -86,7 +86,7 @@ try {
         "--global",
         "--prefix",
         prefix,
-        `${pkg.name}@1.0.3`,
+        `${pkg.name}@1.0.4`,
         "--no-audit",
         "--no-fund",
       ]);
