@@ -658,6 +658,19 @@ export function reduce(state: ViewState, ev: NewEvent, now = 0): ViewState {
       };
     }
 
+    case "operation.cancelled": {
+      if (ev.scope !== "stream") return state;
+      const settled = settleThought(state, now);
+      return {
+        ...settled,
+        thinking: "",
+        transcript: settled.transcript.map((item) =>
+          item.kind === "assistant" && item.streaming ? { ...item, streaming: false } : item,
+        ),
+        status: { ...settled.status, activity: undefined, stream: undefined },
+      };
+    }
+
     case "steer":
       // A mid-run steer the user injected into the running conversation — show it inline as a user turn
       // (settled, so it commits to scrollback like any message).

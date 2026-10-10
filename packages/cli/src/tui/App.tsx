@@ -575,8 +575,8 @@ export function App(deps: AppDeps): ReactNode {
   // boundary and injects them (steering). Anything left when the run ends drains as a follow-up turn.
   const steerRef = useRef<SteeringMessage[]>([]);
   const waitWakeRef = useRef(new AbortController());
-  // Set when you press Enter on an empty line while messages wait on a subagent wave: the wave wraps up and
-  // reports now, so the agent reads your message sooner. Cleared when a run starts.
+  const steerWakeRef = useRef(new AbortController());
+  // Empty Enter requests immediate steering once; active subagents also wrap up and report.
   const hurryRef = useRef(false);
   const cancellingRef = useRef(false);
   const agentModeRef = useRef<AgentMode>(deps.agentMode);
@@ -866,6 +866,7 @@ export function App(deps: AppDeps): ReactNode {
       pendingSwitchRef.current = undefined; // a switch picked during an earlier run already set modelRef
       runStartRef.current = Date.now();
       hurryRef.current = false;
+      steerWakeRef.current = new AbortController();
       sessionAllowedRef.current.clear();
       setTick(0);
       setRunActive(true);
@@ -1050,6 +1051,7 @@ export function App(deps: AppDeps): ReactNode {
           ask, // the `ask_user` tool opens the questionnaire overlay through this
           queuedMessageIds: messageIds,
           waitSignal: () => waitWakeRef.current.signal,
+          steerSignal: () => steerWakeRef.current.signal,
           // Mid-run STEER: the running agent pulls any messages the user sent while it was working and
           // injects them at the next turn boundary. Consumed items leave the visible queue.
           steer: () => {
@@ -1057,6 +1059,7 @@ export function App(deps: AppDeps): ReactNode {
             const msgs = steerRef.current;
             steerRef.current = [];
             waitWakeRef.current = new AbortController();
+            steerWakeRef.current = new AbortController();
             hurryRef.current = false; // read — a later wave in this run isn't cut short
             setQueued([...queueRef.current.map((q) => q.text)]);
             return msgs;
@@ -2337,15 +2340,18 @@ export function App(deps: AppDeps): ReactNode {
         agentModeRef.current === "plan" &&
         planRef.current.some((t) => t.status !== "done");
       const hasAttach = attachmentsRef.current.length > 0;
-      // Enter on an empty line while your messages wait on a subagent wave: ask it to wrap up and report now,
-      // so the agent reads them sooner.
-      if (!task && !hasAttach && busyRef.current && steerRef.current.length > 0 && state.wave) {
+      // Empty Enter interrupts inference, wakes waits, and asks any active subagents to report.
+      if (!task && !hasAttach && busyRef.current && steerRef.current.length > 0) {
         if (!hurryRef.current) {
           hurryRef.current = true;
+          steerWakeRef.current.abort();
+          waitWakeRef.current.abort();
           dispatch({
             t: "notice",
             level: "info",
-            text: "Asking the subagents to wrap up and report, so the agent can read your message.",
+            text: state.wave
+              ? "Asking the subagents to wrap up and report, so the agent can read your message."
+              : "Steering requested. Interrupting the response; any active tool will finish safely before your message is read.",
           });
         }
         return;
@@ -2670,9 +2676,11 @@ export function App(deps: AppDeps): ReactNode {
             {queued.length > 0 ? (
               <Box flexDirection="column" marginTop={1}>
                 <Text color={AmbientTheme.signal}>
-                  {state.wave
-                    ? `↳ ${queued.length} queued — the agent reads ${queued.length === 1 ? "it" : "them"} when the subagents report · enter: ask them to wrap up now`
-                    : `↳ ${queued.length} queued — the agent picks ${queued.length === 1 ? "it" : "them"} up next`}
+                  {steerRef.current.length === 0
+                    ? `↳ ${queued.length} queued for the next run`
+                    : state.wave
+                      ? `↳ ${queued.length} queued — the agent reads ${queued.length === 1 ? "it" : "them"} when the subagents report · enter: ask them to wrap up now`
+                      : `↳ ${queued.length} queued — enter: interrupt the response and steer now`}
                 </Text>
                 {queued.slice(0, qMax).map((q, i) => (
                   // biome-ignore lint/suspicious/noArrayIndexKey: queue order is stable within a render

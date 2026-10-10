@@ -683,7 +683,7 @@ export class Agent {
     let autoContinues = 0;
     let segmentProgress = 0; // successful tool calls since the last checkpoint — the auto-continue cost gate
 
-    while (turns < ceiling) {
+    turnLoop: while (turns < ceiling) {
       if (opts.signal.aborted) {
         emit({ schemaVersion: 1, kind: "operation.cancelled", sessionId, turnId, scope: "turn" });
         emit({
@@ -970,6 +970,10 @@ export class Agent {
         // runChatWithFailover owns the per-attempt budget (its own preflight + escalation per model) and
         // emits the inference.request/response + streamed deltas for every ACTUAL request, including failovers.
         let result: TurnCompletion;
+        const steerSignal = opts.steerSignal?.();
+        const inferenceSignal = steerSignal
+          ? AbortSignal.any([opts.signal, steerSignal])
+          : opts.signal;
         try {
           const out = await runChatWithFailover(
             {
@@ -984,7 +988,7 @@ export class Agent {
               messages: reqMessages,
               tools: reqTools,
               maxTokens: profileOf(target).budgets.desiredOutput,
-              signal: opts.signal,
+              signal: inferenceSignal,
               onContent: () => {},
               onReasoning: () => {},
             },
@@ -998,7 +1002,7 @@ export class Agent {
               turnId,
               attemptId,
               emit,
-              signal: opts.signal,
+              signal: inferenceSignal,
               streamDeltas: true,
               lane: assisted ? "assisted" : "direct",
               // When the wire carries image parts, failover must stay on a vision-capable model (never ship
@@ -1024,11 +1028,25 @@ export class Agent {
               },
             },
           );
+          // A provider may finish despite aborting. Never execute stale proposed actions.
+          if (inferenceSignal.aborted)
+            throw new AmbError({ kind: "cancelled", message: "cancelled", retryable: false });
           result = out.result;
           // Attribute the answer + any tool calls to the attempt that ACTUALLY produced them,
           // which may be a failed-over model, not the first attempt.
           lastAttemptId = out.attemptId;
         } catch (err) {
+          if (steerSignal?.aborted && !opts.signal.aborted) {
+            emit({
+              schemaVersion: 1,
+              kind: "operation.cancelled",
+              sessionId,
+              turnId,
+              scope: "stream",
+            });
+            turns -= 1; // A redirected attempt does not consume the remaining step budget.
+            continue turnLoop;
+          }
           if (err instanceof AmbError && err.kind === "cancelled") {
             emit({
               schemaVersion: 1,

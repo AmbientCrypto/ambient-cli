@@ -251,7 +251,7 @@ To prepare a release, bump the workspace and CLI versions, then run:
 ```bash
 node scripts/update-release-lock.mjs  # refresh the checked-in release shrinkwrap
 bash scripts/pack.sh                 # validates declared external imports and the release lock
-node scripts/verify-install.mjs       # isolated fresh install + upgrade from 1.0.3; TUI and lazy tools
+node scripts/verify-install.mjs       # isolated fresh install + upgrade from 1.0.4; TUI and lazy tools
 node scripts/stage-homebrew.mjs       # prepares the tap formula from the verified artifact
 node scripts/stress-tui.mjs           # 50,000 real TUI events/frames under a 512 MB heap limit
 bash scripts/publish-npm.sh --dry-run # checks the verified tarball without uploading
